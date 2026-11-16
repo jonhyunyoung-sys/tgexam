@@ -6,7 +6,7 @@
 <title>교사용 QR 시험지 배포 (웹 버전 테스트)</title>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root {
@@ -1391,8 +1391,8 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
 
   btn.disabled = true;
   btn.textContent = "저장·발급 중...";
-  showLoadingProgress("☁️ 저장하고 QR 발급 중...", "구글 시트에 시험지를 저장하고 있습니다...", 12);
-  creepLoadingProgress(62, "구글 시트에 시험지를 저장하고 있습니다");
+  showLoadingProgress("☁️ 저장하고 QR 발급 중...", "구글 시트에 시험지를 저장하고 있습니다...", 15);
+  creepLoadingProgress(85, "구글 시트에 시험지를 저장하고 있습니다");
   try {
     const examToSave = currentExam.mode === "cards" ? { ...currentExam, page_images: [] } : currentExam;
     const data = await apiCall({ action: "save_exam", exam: examToSave });
@@ -1401,12 +1401,10 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
       alert(data.error || "저장에 실패했습니다.");
       return;
     }
-    setLoadingProgress(68, "시험 목록을 새로고침하고 있습니다...");
-    creepLoadingProgress(88, "시험 목록을 동기화하고 있습니다");
-    await loadExams();
     setLoadingProgress(94, "QR 코드를 생성하고 있습니다...");
     await showQrForExam(currentExam.id, currentExam.title);
     setLoadingProgress(100, "QR 코드 발급 완료!");
+    loadExams().catch((err) => console.error("background loadExams error:", err));
   } finally {
     hideLoadingProgress();
     btn.disabled = false;
@@ -1468,16 +1466,24 @@ function showQrForExam(examId, title) {
   document.getElementById("qrModalBox").classList.remove("fullscreen");
   document.getElementById("qrModal").classList.add("show");
   return new Promise((resolve) => {
-    QRCode.toDataURL(targetUrl, { width: 320, margin: 2 }, (err, dataUrl) => {
+    const showDataUrl = (url) => {
       if (qrGenMsg) qrGenMsg.style.display = "none";
-      if (err) {
-        alert("QR 생성 오류: " + err);
-        return resolve();
-      }
-      if (qrImgEl) { qrImgEl.src = dataUrl; qrImgEl.style.display = "block"; }
-      document.getElementById("qrDownloadLink").href = dataUrl;
+      if (qrImgEl) { qrImgEl.src = url; qrImgEl.style.display = "block"; }
+      document.getElementById("qrDownloadLink").href = url;
       resolve();
-    });
+    };
+    try {
+      if (typeof QRCode !== "undefined" && typeof QRCode.toDataURL === "function") {
+        QRCode.toDataURL(targetUrl, { width: 300, margin: 2, errorCorrectionLevel: "M" }, (err, dataUrl) => {
+          if (!err && dataUrl) return showDataUrl(dataUrl);
+          showDataUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(targetUrl)}`);
+        });
+      } else {
+        showDataUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(targetUrl)}`);
+      }
+    } catch (e) {
+      showDataUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(targetUrl)}`);
+    }
   });
 }
 
