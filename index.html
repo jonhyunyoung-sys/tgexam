@@ -67,7 +67,7 @@
   }
   .info-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 10px;
   }
   .field label {
@@ -206,6 +206,29 @@
   }
   .result-banner { display: none; border: 2px solid var(--navy); background: #f8fbff; }
   .result-banner.show { display: block; }
+  .away-banner {
+    display: none;
+    border: 2px solid var(--red);
+    background: var(--red-soft);
+    color: var(--red);
+    font-weight: 700;
+    font-size: 0.92rem;
+    padding: 12px 16px;
+  }
+  .away-banner.show { display: block; }
+  .exam-protected {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .exam-protected input, .exam-protected textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .pill-timer-warn {
+    background: #dc2626 !important;
+    color: #fff !important;
+  }
   .ox-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
@@ -222,7 +245,7 @@
   .ox-item.ok { background: var(--green-soft); color: var(--green); }
   .ox-item.bad { background: var(--red-soft); color: var(--red); }
   @media (max-width: 640px) {
-    .info-grid { grid-template-columns: repeat(2, 1fr); }
+    .info-grid { grid-template-columns: repeat(3, 1fr); }
   }
 </style>
 </head>
@@ -234,7 +257,10 @@
       <img id="headerLogo" alt="로고" style="display:none;height:34px;border-radius:6px;background:#fff;padding:2px;" />
       <h1 id="examTitle">시험지 불러오는 중...</h1>
     </div>
-    <div class="pill" id="progressPill">-</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="pill" id="timerPill" style="display:none;">⏱ -</div>
+      <div class="pill" id="progressPill">-</div>
+    </div>
   </div>
 </header>
 
@@ -252,7 +278,117 @@ const API_URL = (params.get("api") || DEFAULT_API_URL).trim();
 const EXAM_ID = (params.get("id") || "").trim();
 
 let EXAM = null;
+let verifiedPin = "";
+let displayQuestions = [];
 const answers = {};
+let awayCount = 0;
+let awayTotalMs = 0;
+let awaySince = 0;
+let blurTimer = null;
+let ignoreBlurUntil = 0;
+let examSubmitted = false;
+let examStartedAt = 0;
+let timerInterval = null;
+let autoSubmitTriggered = false;
+let baseInnerWidth = window.innerWidth;
+let baseInnerHeight = window.innerHeight;
+
+function shuffleArray(arr) {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function showInlineNotice(msg) {
+  const el = document.getElementById("awayBanner");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add("show");
+}
+
+function updateAwayBanner() {
+  const el = document.getElementById("awayBanner");
+  if (!el || awayCount <= 0) return;
+  const totalSec = Math.round(awayTotalMs / 1000);
+  const maxAway = Math.max(0, Number((EXAM && EXAM.max_away_count) || 0));
+  const limitNote = maxAway > 0 ? ` (최대 ${maxAway}회 도달 시 자동 제출)` : "";
+  el.textContent = `⚠️ 시험 화면 이탈 감지: ${awayCount}회 (누적 ${totalSec}초)${limitNote} — 다른 창/앱/화면분할 이동 기록이 선생님께 전송됩니다.`;
+  el.classList.add("show");
+}
+
+function startAway() {
+  if (examSubmitted || !EXAM || EXAM.is_open === false || !examStartedAt || awaySince > 0) return;
+  awaySince = Date.now();
+  awayCount += 1;
+  updateAwayBanner();
+  const maxAway = Math.max(0, Number(EXAM.max_away_count || 0));
+  if (maxAway > 0 && awayCount >= maxAway && !autoSubmitTriggered) {
+    autoSubmitTriggered = true;
+    showInlineNotice(`🚨 화면 이탈 ${awayCount}회로 제한 횟수(${maxAway}회)에 도달해 답안을 자동 제출합니다.`);
+    setTimeout(() => {
+      if (!examSubmitted) submitExam(true);
+    }, 250);
+  }
+}
+
+function endAway() {
+  if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+  if (awaySince > 0) {
+    awayTotalMs += Math.max(0, Date.now() - awaySince);
+    awaySince = 0;
+    updateAwayBanner();
+  }
+  const maxAway = Math.max(0, Number((EXAM && EXAM.max_away_count) || 0));
+  if (maxAway > 0 && awayCount >= maxAway && !examSubmitted && !autoSubmitTriggered) {
+    autoSubmitTriggered = true;
+    submitExam(true);
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+    startAway();
+  } else {
+    endAway();
+  }
+});
+
+window.addEventListener("blur", () => {
+  if (examSubmitted || !EXAM || EXAM.is_open === false || !examStartedAt || Date.now() < ignoreBlurUntil) return;
+  if (blurTimer) clearTimeout(blurTimer);
+  blurTimer = setTimeout(() => {
+    blurTimer = null;
+    if (!document.hasFocus() && !examSubmitted && Date.now() >= ignoreBlurUntil) {
+      startAway();
+    }
+  }, 700);
+});
+
+window.addEventListener("focus", () => {
+  endAway();
+});
+
+window.addEventListener("resize", () => {
+  if (examSubmitted || !EXAM || EXAM.is_open === false || !examStartedAt) return;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  // Detect orientation rotation (width/height swapped) vs actual split-screen width shrink
+  if (Math.abs(w - baseInnerHeight) <= 60 && Math.abs(h - baseInnerWidth) <= 120) {
+    baseInnerWidth = w;
+    baseInnerHeight = h;
+    return;
+  }
+  if (w > baseInnerWidth) baseInnerWidth = w;
+  if (w < baseInnerWidth * 0.78) {
+    startAway();
+  } else if (w >= baseInnerWidth * 0.88 && !document.hidden && document.hasFocus()) {
+    endAway();
+  }
+});
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -267,7 +403,7 @@ function updateProgress() {
   document.getElementById("progressPill").textContent = `응답: ${cnt} / ${EXAM.questions.length}`;
 }
 
-function pickChoice(qNum, val, len, isMulti, prefix) {
+function pickChoice(qNum, val, origVals, isMulti, prefix) {
   const key = String(qNum);
   if (isMulti) {
     const set = new Set((answers[key] || "").split(",").map((s) => s.trim()).filter(Boolean));
@@ -278,9 +414,10 @@ function pickChoice(qNum, val, len, isMulti, prefix) {
     answers[key] = answers[key] === val ? "" : val;
   }
   const activeSet = new Set((answers[key] || "").split(",").map((s) => s.trim()).filter(Boolean));
-  for (let i = 1; i <= len; i++) {
-    const btn = document.getElementById(`${prefix}-${qNum}-${i}`);
-    if (btn) btn.classList.toggle("selected", activeSet.has(String(i)));
+  const valsList = Array.isArray(origVals) ? origVals : Array.from({ length: Number(origVals) || 0 }, (_, idx) => String(idx + 1));
+  for (const ov of valsList) {
+    const btn = document.getElementById(`${prefix}-${qNum}-${ov}`);
+    if (btn) btn.classList.toggle("selected", activeSet.has(String(ov)));
   }
   updateProgress();
 }
@@ -288,6 +425,111 @@ function pickChoice(qNum, val, len, isMulti, prefix) {
 function setShort(qNum, val) {
   answers[String(qNum)] = val;
   updateProgress();
+}
+
+function startExamSession() {
+  const root = document.getElementById("mainRoot");
+  document.title = EXAM.title;
+  document.getElementById("examTitle").textContent = EXAM.title;
+  if (EXAM.header_logo) {
+    const logo = document.getElementById("headerLogo");
+    logo.src = EXAM.header_logo;
+    logo.style.display = "inline-block";
+  }
+
+  if (!EXAM.is_open) {
+    root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;"><h2 style="color:var(--red);margin:0 0 8px;">응시가 마감된 시험지입니다.</h2><p style="color:var(--muted);margin:0;">선생님께 문의해 주세요.</p></div>`;
+    return;
+  }
+
+  const ruleNotes = [];
+  if (EXAM.time_limit_min > 0) ruleNotes.push(`제한 시간 ${EXAM.time_limit_min}분`);
+  if (EXAM.max_away_count > 0) ruleNotes.push(`${EXAM.max_away_count}회 이탈 시 자동 제출`);
+  ruleNotes.push("지문 복사·붙여넣기 제한");
+  const ruleLine = `<div style="margin-top:8px;font-size:0.8rem;color:var(--muted);">※ 학년·반·번호를 모두 입력해 주세요. (${ruleNotes.join(" · ")})</div>`;
+
+  root.innerHTML = `
+    <section class="card away-banner" id="awayBanner"></section>
+    <section class="card">
+      <div class="info-grid">
+        <div class="field"><label>학년 (필수)</label><input id="grade" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="예: 6" /></div>
+        <div class="field"><label>반 (필수)</label><input id="classNum" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="예: 1" /></div>
+        <div class="field"><label>번호 (필수)</label><input id="studentNum" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="예: 20" /></div>
+      </div>
+      ${ruleLine}
+    </section>
+    <section class="card result-banner" id="resultBanner"></section>
+    <div id="examBody" class="exam-protected"></div>
+    <div class="submit-bar" id="submitBar">
+      <button type="button" class="btn-submit" id="submitBtn">답안 제출하기</button>
+    </div>
+  `;
+
+  baseInnerWidth = window.innerWidth;
+  baseInnerHeight = window.innerHeight;
+  renderQuestions();
+  attachAntiCopyHandlers();
+  updateProgress();
+  examStartedAt = Date.now();
+  startExamTimer();
+  document.getElementById("submitBtn").addEventListener("click", () => submitExam(false));
+}
+
+function startExamTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  const limitMin = Math.max(0, Number((EXAM && EXAM.time_limit_min) || 0));
+  const pill = document.getElementById("timerPill");
+  if (!limitMin || !pill) return;
+  const deadline = examStartedAt + limitMin * 60 * 1000;
+  pill.style.display = "inline-block";
+
+  const tick = () => {
+    if (examSubmitted) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+      return;
+    }
+    const remSec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    const mm = String(Math.floor(remSec / 60)).padStart(2, "0");
+    const ss = String(remSec % 60).padStart(2, "0");
+    pill.textContent = `⏱ ${mm}:${ss}`;
+    pill.classList.toggle("pill-timer-warn", remSec <= 60);
+    if (remSec <= 0 && !autoSubmitTriggered) {
+      autoSubmitTriggered = true;
+      clearInterval(timerInterval);
+      timerInterval = null;
+      showInlineNotice("⏱ 시험 제한 시간이 종료되어 답안을 자동 제출합니다.");
+      submitExam(true);
+    }
+  };
+  tick();
+  timerInterval = setInterval(tick, 500);
+}
+
+function attachAntiCopyHandlers() {
+  const body = document.getElementById("examBody");
+  if (!body) return;
+  ["copy", "cut"].forEach((evt) => {
+    body.addEventListener(evt, (e) => {
+      if (!examSubmitted) e.preventDefault();
+    });
+  });
+  body.addEventListener("contextmenu", (e) => {
+    if (!examSubmitted && (!e.target || e.target.tagName !== "INPUT")) {
+      e.preventDefault();
+    }
+  });
+  body.addEventListener("selectstart", (e) => {
+    if (!examSubmitted && (!e.target || e.target.tagName !== "INPUT")) {
+      e.preventDefault();
+    }
+  });
+  body.addEventListener("paste", (e) => {
+    if (!examSubmitted && e.target && e.target.classList && e.target.classList.contains("short-input")) {
+      e.preventDefault();
+      showInlineNotice("⚠️ 단답형 입력칸에는 복사한 내용을 붙여넣을 수 없습니다.");
+    }
+  });
 }
 
 async function init() {
@@ -310,38 +552,63 @@ async function init() {
     }
 
     EXAM = data.exam;
-    document.title = EXAM.title;
-    document.getElementById("examTitle").textContent = EXAM.title;
-    if (EXAM.header_logo) {
-      const logo = document.getElementById("headerLogo");
-      logo.src = EXAM.header_logo;
-      logo.style.display = "inline-block";
-    }
-
-    if (!EXAM.is_open) {
-      root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;"><h2 style="color:var(--red);margin:0 0 8px;">응시가 마감된 시험지입니다.</h2><p style="color:var(--muted);margin:0;">선생님께 문의해 주세요.</p></div>`;
+    if (data.requires_pin) {
+      document.title = EXAM.title;
+      document.getElementById("examTitle").textContent = EXAM.title;
+      if (EXAM.header_logo) {
+        const logo = document.getElementById("headerLogo");
+        logo.src = EXAM.header_logo;
+        logo.style.display = "inline-block";
+      }
+      if (!EXAM.is_open) {
+        root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;"><h2 style="color:var(--red);margin:0 0 8px;">응시가 마감된 시험지입니다.</h2><p style="color:var(--muted);margin:0;">선생님께 문의해 주세요.</p></div>`;
+        return;
+      }
+      root.innerHTML = `
+        <section class="card" style="max-width:440px;margin:28px auto;text-align:center;padding:28px 22px;">
+          <h2 style="margin:0 0 8px;color:var(--navy);">🔐 수업 입장 코드 입력</h2>
+          <p style="margin:0 0 16px;font-size:0.9rem;color:var(--muted);">선생님이 칠판에 안내한 입장 코드를 입력해야 시험지가 열립니다.</p>
+          <input id="pinInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="입장 코드 입력" style="width:100%;padding:11px 12px;border:1.5px solid var(--border);border-radius:10px;font-size:1.1rem;text-align:center;font-weight:700;" />
+          <div id="pinErr" style="color:var(--red);font-size:0.86rem;font-weight:700;margin-top:8px;min-height:18px;"></div>
+          <button type="button" class="btn-submit" id="pinVerifyBtn" style="margin-top:10px;width:100%;padding:12px;">시험 시작하기</button>
+        </section>
+      `;
+      const verifyFn = async () => {
+        const pin = document.getElementById("pinInput").value.trim();
+        const errEl = document.getElementById("pinErr");
+        const vBtn = document.getElementById("pinVerifyBtn");
+        if (!pin) { errEl.textContent = "입장 코드를 입력해 주세요."; return; }
+        vBtn.disabled = true;
+        vBtn.textContent = "확인 중...";
+        errEl.textContent = "";
+        try {
+          const vRes = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ action: "verify_pin", exam_id: EXAM_ID, pin })
+          });
+          const vData = await vRes.json();
+          if (!vData.ok || !vData.exam) {
+            errEl.textContent = vData.error || "입장 코드가 올바르지 않습니다.";
+            vBtn.disabled = false;
+            vBtn.textContent = "시험 시작하기";
+            return;
+          }
+          verifiedPin = pin;
+          EXAM = vData.exam;
+          startExamSession();
+        } catch (e) {
+          errEl.textContent = "네트워크 오류가 발생했습니다. 다시 시도해 주세요.";
+          vBtn.disabled = false;
+          vBtn.textContent = "시험 시작하기";
+        }
+      };
+      document.getElementById("pinVerifyBtn").addEventListener("click", verifyFn);
+      document.getElementById("pinInput").addEventListener("keydown", (e) => { if (e.key === "Enter") verifyFn(); });
       return;
     }
 
-    root.innerHTML = `
-      <section class="card">
-        <div class="info-grid">
-          <div class="field"><label>학년</label><input id="grade" type="text" placeholder="예: 6" /></div>
-          <div class="field"><label>반</label><input id="classNum" type="text" placeholder="예: 1" /></div>
-          <div class="field"><label>번호</label><input id="studentNum" type="text" placeholder="예: 20" /></div>
-          <div class="field"><label>이름 (필수)</label><input id="studentName" type="text" placeholder="이름 입력" /></div>
-        </div>
-      </section>
-      <section class="card result-banner" id="resultBanner"></section>
-      <div id="examBody"></div>
-      <div class="submit-bar" id="submitBar">
-        <button type="button" class="btn-submit" id="submitBtn">답안 제출하기</button>
-      </div>
-    `;
-
-    renderQuestions();
-    updateProgress();
-    document.getElementById("submitBtn").addEventListener("click", submitExam);
+    startExamSession();
   } catch (err) {
     root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;color:var(--red);">시험지를 불러오지 못했습니다. 네트워크 연결 또는 선생님 주소를 확인해 주세요.</div>`;
   }
@@ -350,6 +617,7 @@ async function init() {
 function renderQuestions() {
   const body = document.getElementById("examBody");
   if (EXAM.mode === "omr_pages" && EXAM.page_images && EXAM.page_images.length) {
+    displayQuestions = EXAM.questions.map((q) => ({ ...q, _dispNum: q.num }));
     const pagesCard = document.createElement("section");
     pagesCard.className = "card omr-pages-wrap";
     pagesCard.innerHTML = `<h3 style="margin:0 0 10px;color:var(--navy);">시험지 원문</h3>` +
@@ -359,15 +627,15 @@ function renderQuestions() {
     const omrCard = document.createElement("section");
     omrCard.className = "card";
     omrCard.innerHTML = `<h3 style="margin:0 0 8px;color:var(--navy);">OMR 답안 입력</h3>`;
-    EXAM.questions.forEach((q) => {
+    displayQuestions.forEach((q) => {
       const row = document.createElement("div");
       row.className = "omr-pad-row";
       if (q.type === "short") {
-        row.innerHTML = `<strong>${q.num}번 ${q.prompt ? "· " + escapeHtml(q.prompt) : ""}</strong><input type="text" class="short-input" style="max-width:260px;margin:0;" placeholder="정답 입력" oninput="setShort('${q.num}', this.value)" />`;
+        row.innerHTML = `<strong>${q.num}번 ${q.prompt ? "· " + escapeHtml(q.prompt) : ""}</strong><input type="text" class="short-input" style="max-width:260px;margin:0;" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="정답 입력" oninput="setShort('${q.num}', this.value)" />`;
       } else {
         const pills = q.choices.map((c, ci) => {
           const val = String(ci + 1);
-          return `<button type="button" class="omr-pill" id="omr-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', ${q.choices.length}, ${Boolean(q.multi)}, 'omr')">${CIRCLED[ci] || val}</button>`;
+          return `<button type="button" class="omr-pill" id="omr-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', [${q.choices.map((_, k) => `'${k + 1}'`).join(",")}], ${Boolean(q.multi)}, 'omr')">${CIRCLED[ci] || val}</button>`;
         }).join("");
         row.innerHTML = `<strong>${q.num}번 ${q.multi ? "<small style='color:var(--blue);'>(복수)</small>" : ""}</strong><div class="omr-pills">${pills}</div>`;
       }
@@ -377,24 +645,33 @@ function renderQuestions() {
     return;
   }
 
-  EXAM.questions.forEach((q) => {
+  const hasGroupPrompts = EXAM.questions.some((q) => /^\s*\[\s*\d+\s*[~\-–]\s*\d+\s*\]/.test(q.prompt || ""));
+  const baseOrder = hasGroupPrompts ? [...EXAM.questions] : shuffleArray(EXAM.questions);
+  displayQuestions = baseOrder.map((q, di) => {
+    const dispChoices = (q.type !== "short" && q.choices && q.choices.length >= 2)
+      ? shuffleArray(q.choices.map((txt, ci) => ({ text: txt, origVal: String(ci + 1) })))
+      : (q.choices || []).map((txt, ci) => ({ text: txt, origVal: String(ci + 1) }));
+    return { ...q, _dispNum: di + 1, _dispChoices: dispChoices };
+  });
+
+  displayQuestions.forEach((q) => {
     const card = document.createElement("section");
     card.className = "card";
-    let html = `<div style="font-weight:700;font-size:1.02rem;white-space:pre-line;"><span style="color:var(--navy);margin-right:6px;">${q.num}.</span>${escapeHtml(q.prompt)}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
+    let html = `<div style="font-weight:700;font-size:1.02rem;white-space:pre-line;"><span style="color:var(--navy);margin-right:6px;">${q._dispNum}.</span>${escapeHtml(q.prompt)}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
     if (q.passage) html += `<div class="passage">${escapeHtml(q.passage)}</div>`;
     if (q.images && q.images.length) {
-      html += `<div class="q-imgs">${q.images.map((u) => `<img src="${u}" alt="${q.num}번 그림" />`).join("")}</div>`;
+      html += `<div class="q-imgs">${q.images.map((u) => `<img src="${u}" alt="${q._dispNum}번 그림" />`).join("")}</div>`;
     }
     if (q.type === "short") {
-      html += `<input type="text" class="short-input" placeholder="답을 입력하세요" oninput="setShort('${q.num}', this.value)" />`;
+      html += `<input type="text" class="short-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="답을 입력하세요" oninput="setShort('${q.num}', this.value)" />`;
     } else {
-      html += `<div class="choices">` + q.choices.map((c, ci) => {
-        const val = String(ci + 1);
+      const origValsArg = `[${q._dispChoices.map((c) => `'${c.origVal}'`).join(",")}]`;
+      html += `<div class="choices">` + q._dispChoices.map((cObj, ci) => {
         return `
-          <button type="button" class="choice-btn" id="ch-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', ${q.choices.length}, ${Boolean(q.multi)}, 'ch')">
+          <button type="button" class="choice-btn" id="ch-${q.num}-${cObj.origVal}" onclick="pickChoice('${q.num}', '${cObj.origVal}', ${origValsArg}, ${Boolean(q.multi)}, 'ch')">
             <span class="check-box">✓</span>
-            <span style="font-weight:700;color:var(--muted);">${CIRCLED[ci] || val}</span>
-            <span>${escapeHtml(c)}</span>
+            <span style="font-weight:700;color:var(--muted);">${CIRCLED[ci] || (ci + 1)}</span>
+            <span>${escapeHtml(cObj.text)}</span>
           </button>
         `;
       }).join("") + `</div>`;
@@ -404,21 +681,39 @@ function renderQuestions() {
   });
 }
 
-async function submitExam() {
-  const name = document.getElementById("studentName").value.trim();
-  if (!name) {
-    alert("이름을 입력해 주세요.");
-    document.getElementById("studentName").focus();
-    return;
-  }
-  const unanswered = EXAM.questions.filter((q) => !String(answers[String(q.num)] || "").trim()).map((q) => q.num);
-  if (unanswered.length && !confirm(`아직 풀지 않은 문항(${unanswered.join("번, ")}번)이 있습니다.\n그대로 제출할까요?`)) {
-    return;
+async function submitExam(isAuto = false) {
+  endAway();
+  const gradeEl = document.getElementById("grade");
+  const classEl = document.getElementById("classNum");
+  const numEl = document.getElementById("studentNum");
+  const gradeVal = gradeEl ? gradeEl.value.trim() : "";
+  const classVal = classEl ? classEl.value.trim() : "";
+  const numVal = numEl ? numEl.value.trim() : "";
+
+  if (!isAuto) {
+    if (!gradeVal) { ignoreBlurUntil = Date.now() + 800; alert("학년을 입력해 주세요."); if (gradeEl) gradeEl.focus(); return; }
+    if (!classVal) { ignoreBlurUntil = Date.now() + 800; alert("반을 입력해 주세요."); if (classEl) classEl.focus(); return; }
+    if (!numVal) { ignoreBlurUntil = Date.now() + 800; alert("번호를 입력해 주세요."); if (numEl) numEl.focus(); return; }
+
+    const listForCheck = displayQuestions.length ? displayQuestions : EXAM.questions;
+    const unanswered = listForCheck
+      .filter((q) => !String(answers[String(q.num)] || "").trim())
+      .map((q) => q._dispNum || q.num);
+    if (unanswered.length) {
+      ignoreBlurUntil = Date.now() + 1000;
+      const ok = confirm(`아직 풀지 않은 문항(${unanswered.join("번, ")}번)이 있습니다.\n그대로 제출할까요?`);
+      ignoreBlurUntil = Date.now() + 500;
+      if (!ok) return;
+    }
   }
 
   const btn = document.getElementById("submitBtn");
-  btn.disabled = true;
-  btn.textContent = "제출 중...";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = isAuto ? "자동 제출 중..." : "제출 중...";
+  }
+
+  const elapsedSec = examStartedAt > 0 ? Math.max(1, Math.round((Date.now() - examStartedAt) / 1000)) : 0;
 
   try {
     // Use text/plain to avoid CORS preflight OPTIONS on Google Apps Script
@@ -428,39 +723,73 @@ async function submitExam() {
       body: JSON.stringify({
         action: "submit",
         exam_id: EXAM.id,
-        grade: document.getElementById("grade").value.trim(),
-        class_num: document.getElementById("classNum").value.trim(),
-        student_num: document.getElementById("studentNum").value.trim(),
-        student_name: name,
+        pin: verifiedPin,
+        grade: gradeVal || (isAuto ? "미입력" : ""),
+        class_num: classVal || (isAuto ? "미입력" : ""),
+        student_num: numVal || (isAuto ? "미입력" : ""),
+        away_count: awayCount,
+        away_seconds: Math.round(awayTotalMs / 1000),
+        elapsed_seconds: elapsedSec,
+        auto_submit: Boolean(isAuto),
         answers
       })
     });
     const data = await res.json();
     if (!data.ok) {
-      alert(data.error || "제출에 실패했습니다.");
-      btn.disabled = false;
-      btn.textContent = "답안 제출하기";
+      ignoreBlurUntil = Date.now() + 500;
+      if (!isAuto) alert(data.error || "제출에 실패했습니다.");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "답안 제출하기";
+      }
       return;
     }
 
+    examSubmitted = true;
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
     document.getElementById("submitBar").style.display = "none";
     document.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
     const banner = document.getElementById("resultBanner");
 
-    if (data.show_score) {
+    const qByNum = {};
+    (EXAM.questions || []).forEach((q) => { qByNum[String(q.num)] = q; });
+    const dispNumByOrig = {};
+    displayQuestions.forEach((dq) => { dispNumByOrig[String(dq.num)] = dq._dispNum || dq.num; });
+    const fmtAns = (qOrigNum, rawVal) => {
+      if (!rawVal) return "미응답";
+      const qObj = qByNum[String(qOrigNum)];
+      if (qObj && qObj.type !== "short" && qObj.choices && qObj.choices.length) {
+        return String(rawVal).split(",").map((v) => {
+          const idx = Number(v.trim()) - 1;
+          return (idx >= 0 && qObj.choices[idx] !== undefined) ? qObj.choices[idx] : v;
+        }).join(", ");
+      }
+      return String(rawVal);
+    };
+
+    if (data.show_score && data.score_mode !== "score_only" && Array.isArray(data.details)) {
       const pct = data.total_possible ? Math.round((data.total_earned / data.total_possible) * 1000) / 10 : 0;
-      const oxHtml = data.details.map((d) => `
+      const orderedDetails = displayQuestions.length
+        ? displayQuestions.map((dq) => data.details.find((d) => String(d.num) === String(dq.num))).filter(Boolean)
+        : data.details;
+      const oxHtml = orderedDetails.map((d) => {
+        const dn = dispNumByOrig[String(d.num)] || d.num;
+        return `
         <div class="ox-item ${d.is_correct ? "ok" : "bad"}">
-          <div style="font-size:0.78rem;">${d.num}번</div>
+          <div style="font-size:0.78rem;">${dn}번</div>
           <div>${d.is_correct ? "O" : "X"}</div>
         </div>
-      `).join("");
-      const expHtml = data.details.map((d) => `
+      `;
+      }).join("");
+      const expHtml = orderedDetails.map((d) => {
+        const dn = dispNumByOrig[String(d.num)] || d.num;
+        return `
         <div style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:0.88rem;">
-          <strong>${d.num}번</strong> · 내 답: <b>${escapeHtml(d.picked || "미응답")}</b> · 정답: <b style="color:var(--green);">${escapeHtml(d.correct)}</b>
+          <strong>${dn}번</strong> · 내 답: <b>${escapeHtml(fmtAns(d.num, d.picked))}</b> · 정답: <b style="color:var(--green);">${escapeHtml(fmtAns(d.num, d.correct))}</b>
           ${d.explain ? `<div style="color:var(--muted);margin-top:2px;">${escapeHtml(d.explain)}</div>` : ""}
         </div>
-      `).join("");
+      `;
+      }).join("");
       banner.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
           <div>
@@ -472,15 +801,28 @@ async function submitExam() {
         <div class="ox-grid">${oxHtml}</div>
         <div style="margin-top:14px;border-top:1px solid var(--border);">${expHtml}</div>
       `;
+    } else if (data.show_score) {
+      const pct = data.total_possible ? Math.round((data.total_earned / data.total_possible) * 1000) / 10 : 0;
+      banner.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <div>
+            <div style="font-size:1.15rem;font-weight:800;color:var(--navy);">답안이 정상적으로 제출되었습니다!</div>
+            <div style="font-size:0.88rem;color:var(--muted);">제출 시각: ${data.submitted_at} · (정답·해설은 비공개 설정입니다)</div>
+          </div>
+          <div style="font-size:1.7rem;font-weight:800;color:var(--blue);">${data.total_earned} / ${data.total_possible}점 (${pct}점)</div>
+        </div>
+      `;
     } else {
       banner.innerHTML = `<div style="text-align:center;padding:12px 0;"><div style="font-size:1.2rem;font-weight:800;color:var(--green);">답안이 정상적으로 제출되었습니다!</div><div style="font-size:0.9rem;color:var(--muted);margin-top:4px;">제출 시각: ${data.submitted_at}</div></div>`;
     }
     banner.classList.add("show");
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
-    alert("제출 중 네트워크 오류가 발생했습니다. 다시 시도해 주세요.");
-    btn.disabled = false;
-    btn.textContent = "답안 제출하기";
+    if (!isAuto) alert("제출 중 네트워크 오류가 발생했습니다. 다시 시도해 주세요.");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "답안 제출하기";
+    }
   }
 }
 

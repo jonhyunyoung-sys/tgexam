@@ -193,20 +193,20 @@
 <main class="container" id="appSection" style="display:none;">
   <div class="grid-top">
     <section class="card">
-      <h2>1. 시험지 올리기 (HWPX · PDF · 이미지)</h2>
+      <h2>1. 시험지 올리기 (HWP · HWPX · PDF · 이미지)</h2>
       <div class="dropzone" id="dropzone">
         <div style="font-size:1.02rem;font-weight:700;color:var(--navy);margin-bottom:6px;">
-          클릭하거나 .hwpx / .pdf / 이미지 파일을 끌어다 놓으세요
+          클릭하거나 .hwp / .hwpx / .pdf / 이미지 파일을 끌어다 놓으세요
         </div>
         <div style="font-size:0.84rem;color:var(--muted);">
-          설치 없이 브라우저에서 문항·보기·그림을 바로 분석합니다. (구형 .hwp는 한글에서 HWPX 또는 PDF로 저장 후 업로드)
+          설치 없이 브라우저에서 문항·보기·그림을 바로 분석합니다. (구형 .hwp는 첫 분석 시 HOP 한글 엔진을 1회 불러옵니다)
         </div>
         <input id="fileInput" type="file" accept=".hwpx,.pdf,.png,.jpg,.jpeg,.webp,.hwp" multiple hidden />
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-top:12px;">
         <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer;">
           <input type="checkbox" id="forcePageMode" />
-          PDF를 원본 그림 그대로 띄우고 OMR 체크만 받기
+          PDF / HWP를 원본 그림 그대로 띄우고 OMR 체크만 받기
         </label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button type="button" class="btn btn-light btn-sm" id="manualNewBtn">+ 빈 시험지 만들기</button>
@@ -249,10 +249,36 @@
           <option value="omr_pages">원본 페이지 이미지 + OMR 체크</option>
         </select>
       </div>
-      <label style="font-size:0.88rem;font-weight:600;display:flex;align-items:center;gap:6px;padding-bottom:8px;cursor:pointer;">
-        <input type="checkbox" id="edShowScore" checked />
-        학생 제출 즉시 점수 공개
-      </label>
+      <div class="field" style="margin:0;min-width:210px;">
+        <label>제출 후 결과 공개</label>
+        <select id="edScoreMode">
+          <option value="full">점수 + 정답 + 해설 바로 공개</option>
+          <option value="score_only">점수만 공개 (정답·해설 숨김)</option>
+          <option value="none">제출 완료만 표시 (점수·정답 숨김)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="editor-bar" style="margin-top:-4px;background:#f8fbff;">
+      <div class="field" style="margin:0;min-width:155px;">
+        <label>⏱ 제한 시간 (분, 0=무제한)</label>
+        <input id="edTimeLimit" type="number" min="0" max="180" step="1" value="0" placeholder="0" />
+      </div>
+      <div class="field" style="margin:0;min-width:240px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="edUsePin" style="width:auto;" />
+          🔐 수업 입장 코드(PIN) 사용
+        </label>
+        <input id="edEntryPin" type="text" maxlength="10" autocomplete="off" placeholder="체크 시 코드 입력 (예: 4829)" disabled />
+      </div>
+      <div class="field" style="margin:0;min-width:205px;">
+        <label>🚨 화면 이탈 제한</label>
+        <select id="edMaxAway">
+          <option value="3">3회 이탈 시 자동 제출 (권장)</option>
+          <option value="5">5회 이탈 시 자동 제출</option>
+          <option value="0">제한 없음 (경고·결과표 기록만)</option>
+        </select>
+      </div>
     </div>
 
     <div id="pagePreviewWrap" style="display:none;">
@@ -275,6 +301,7 @@
 <div class="modal-backdrop" id="qrModal">
   <div class="modal" id="qrModalBox">
     <h2 id="qrExamTitle" style="margin:0 0 6px;color:var(--navy);"></h2>
+    <div id="qrPinBanner" style="display:none;margin:8px auto 6px;padding:7px 14px;border-radius:10px;background:var(--blue-soft);color:var(--navy);font-weight:800;font-size:1.05rem;"></div>
     <div style="font-size:0.88rem;color:var(--muted);">학생들이 태블릿/스마트폰 카메라로 아래 QR코드를 스캔하면 바로 응시합니다.</div>
     <div id="qrGeneratingMsg" style="display:none;padding:36px 0;color:var(--blue);font-weight:700;">⏳ QR 코드 이미지를 생성하고 있습니다...</div>
     <img id="qrImg" alt="시험지 QR코드" />
@@ -858,6 +885,274 @@ async function parsePdfFile(file, forcePageMode) {
   };
 }
 
+const RHWP_BASE = "https://cdn.jsdelivr.net/npm/@rhwp/core@0.9.0";
+let rhwpReadyPromise = null;
+
+async function loadRhwpEngine() {
+  if (rhwpReadyPromise) return rhwpReadyPromise;
+  rhwpReadyPromise = (async () => {
+    if (typeof globalThis.measureTextWidth !== "function") {
+      let mCtx = null;
+      let lastFont = "";
+      globalThis.measureTextWidth = (font, text) => {
+        if (!mCtx) mCtx = document.createElement("canvas").getContext("2d");
+        const f = font || "12px sans-serif";
+        if (f !== lastFont) { mCtx.font = f; lastFont = f; }
+        return mCtx.measureText(String(text || "")).width;
+      };
+    }
+
+    setLoadingProgress(5, "HOP(rhwp) 한글 엔진 스크립트 불러오는 중...");
+    const mod = await import(`${RHWP_BASE}/rhwp.js`);
+
+    setLoadingProgress(8, "HOP(rhwp) WASM 엔진 다운로드 중... (최초 1회 약 8MB)");
+    const res = await fetch(`${RHWP_BASE}/rhwp_bg.wasm`);
+    if (!res.ok) throw new Error(`HOP 엔진 다운로드 실패 (HTTP ${res.status})`);
+
+    let wasmBytes;
+    const rawLen = Number(res.headers.get("content-length") || 0);
+    const isEncoded = Boolean(res.headers.get("content-encoding"));
+    const estTotal = (!isEncoded && rawLen > 0) ? rawLen : 26835482;
+    if (res.body && typeof res.body.getReader === "function") {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.byteLength;
+        const ratio = Math.min(1, received / estTotal);
+        const mbDone = (received / (1024 * 1024)).toFixed(1);
+        setLoadingProgress(
+          8 + Math.round(ratio * 37),
+          `HOP(rhwp) 한글 엔진 불러오는 중... (${mbDone} MB)`
+        );
+      }
+      const merged = new Uint8Array(received);
+      let pos = 0;
+      for (const c of chunks) { merged.set(c, pos); pos += c.byteLength; }
+      wasmBytes = merged;
+    } else {
+      wasmBytes = new Uint8Array(await res.arrayBuffer());
+    }
+
+    setLoadingProgress(48, "HOP(rhwp) 엔진 초기화 중...");
+    await mod.default({ module_or_path: wasmBytes });
+    return mod;
+  })().catch((err) => {
+    rhwpReadyPromise = null;
+    throw err;
+  });
+  return rhwpReadyPromise;
+}
+
+function parseRhwpJsonText(raw) {
+  if (!raw) return "";
+  let s = String(raw);
+  try {
+    const parsed = JSON.parse(s);
+    if (typeof parsed === "string") s = parsed;
+    else if (parsed && typeof parsed.text === "string") s = parsed.text;
+  } catch (_) {}
+  return s;
+}
+
+function renderSvgToDataUrl(svgStr, maxWidth = 920) {
+  return new Promise((resolve) => {
+    if (!svgStr) return resolve(null);
+    const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const baseW = img.naturalWidth || img.width || 794;
+        const baseH = img.naturalHeight || img.height || 1123;
+        const targetW = Math.min(maxWidth, Math.max(760, Math.round(baseW * 1.4)));
+        const targetH = Math.max(1, Math.round((baseH / Math.max(1, baseW)) * targetW));
+        const canvas = document.createElement("canvas");
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, targetW, targetH);
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      } catch (_) {
+        resolve(null);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
+}
+
+function extractSvgTextYsAndImages(svgStr) {
+  const doc = new DOMParser().parseFromString(svgStr || "", "image/svg+xml");
+  const textYs = [];
+  const rawImages = [];
+
+  function walk(node, ty) {
+    if (!node || node.nodeType !== 1) return;
+    let nextTy = ty;
+    const tf = node.getAttribute("transform") || "";
+    const mTr = /translate\(\s*[-+]?[\d.]+(?:e[-+]?\d+)?(?:[,\s]+([-+]?[\d.]+(?:e[-+]?\d+)?))?\s*\)/i.exec(tf);
+    if (mTr && mTr[1] !== undefined) nextTy += parseFloat(mTr[1]) || 0;
+
+    const tag = (node.localName || "").toLowerCase();
+    if (tag === "text") {
+      const y = (parseFloat(node.getAttribute("y")) || 0) + nextTy;
+      if (!textYs.length || Math.abs(y - textYs[textYs.length - 1]) > 4) textYs.push(y);
+    } else if (tag === "image") {
+      const href = node.getAttribute("href") || node.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "";
+      if (href.startsWith("data:image/")) {
+        const y = (parseFloat(node.getAttribute("y")) || 0) + nextTy;
+        rawImages.push({ y, href });
+      }
+    }
+    for (const ch of node.children) walk(ch, nextTy);
+  }
+  walk(doc.documentElement, 0);
+  textYs.sort((a, b) => a - b);
+  rawImages.sort((a, b) => a.y - b.y);
+  return { textYs, rawImages };
+}
+
+async function parseHwpFile(file, forcePageMode) {
+  const { HwpDocument } = await loadRhwpEngine();
+  setLoadingProgress(52, `${file.name} 문서 구조를 해석하고 있습니다...`);
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let doc;
+  try {
+    doc = new HwpDocument(buf);
+  } catch (err) {
+    const msg = String(err || "");
+    if (/password|암호/i.test(msg)) {
+      throw new Error("암호가 설정된 HWP 파일은 읽을 수 없습니다. 암호를 해제하거나 PDF로 저장해 주세요.");
+    }
+    throw err;
+  }
+
+  try {
+    const totalPages = Math.max(1, doc.pageCount());
+    const svgs = [];
+    const pageImages = [];
+    for (let p = 0; p < totalPages; p++) {
+      setLoadingProgress(
+        54 + Math.round(((p + 1) / totalPages) * 32),
+        `HWP ${p + 1} / ${totalPages}쪽 렌더링 중...`
+      );
+      const svg = doc.renderPageSvg(p);
+      svgs.push(svg);
+      const imgUrl = await renderSvgToDataUrl(svg, 920);
+      if (imgUrl) pageImages.push(imgUrl);
+    }
+
+    const fallbackName = file.name.replace(/\.[^.]+$/, "");
+    let parsedCards = null;
+
+    if (!forcePageMode) {
+      try {
+        const hwpxBytes = doc.exportHwpx();
+        const hwpxFile = new File([hwpxBytes], file.name.replace(/\.hwp$/i, ".hwpx"), { type: "application/hwp+zip" });
+        const cand = await parseHwpxFile(hwpxFile);
+        const svgHasImages = svgs.some((s) => s && s.includes("<image"));
+        const candHasImages = cand.questions.some((q) => q.images && q.images.length) || Boolean(cand.header_logo);
+        if (cand.questions.length > 1 && (!svgHasImages || candHasImages)) {
+          parsedCards = cand;
+        }
+      } catch (_) {}
+
+      if (!parsedCards) {
+        const blocks = [];
+        const seenDataUris = new Set();
+        for (let p = 0; p < totalPages; p++) {
+          const pageTxt = cleanText(parseRhwpJsonText(doc.getPageText(p)));
+          const lines = pageTxt ? pageTxt.split("\n") : [];
+          const { textYs, rawImages } = extractSvgTextYsAndImages(svgs[p]);
+
+          if (!rawImages.length) {
+            if (pageTxt) blocks.push({ type: "text", text: pageTxt });
+            continue;
+          }
+
+          const compressedImgs = [];
+          for (const ri of rawImages) {
+            if (seenDataUris.has(ri.href)) continue;
+            seenDataUris.add(ri.href);
+            const info = await compressImageFromBlobOrCanvas(ri.href, 720);
+            if (info) compressedImgs.push({ y: ri.y, info });
+          }
+
+          const lineBuckets = Array.from({ length: lines.length + 1 }, () => []);
+          for (const ci of compressedImgs) {
+            let k = 0;
+            while (k < textYs.length && textYs[k] <= ci.y + 6) k++;
+            const slot = lines.length
+              ? Math.min(lines.length, Math.max(0, Math.round((k / Math.max(1, textYs.length)) * lines.length)))
+              : 0;
+            lineBuckets[slot].push(ci.info);
+          }
+
+          for (const info of lineBuckets[0]) blocks.push({ type: "image", ...info });
+          for (let li = 0; li < lines.length; li++) {
+            blocks.push({ type: "text", text: lines[li] });
+            for (const info of lineBuckets[li + 1]) blocks.push({ type: "image", ...info });
+          }
+        }
+
+        const { questions, docTitle, headerLogo } = splitBlocksToQuestions(blocks);
+        if (questions.length > 1) {
+          parsedCards = {
+            mode: "cards",
+            page_images: pageImages,
+            questions,
+            suggested_title: docTitle || fallbackName,
+            header_logo: headerLogo,
+          };
+        }
+      }
+    }
+
+    if (parsedCards) {
+      return {
+        ...parsedCards,
+        page_images: pageImages,
+      };
+    }
+
+    // OMR page mode (either requested or fallback when no numbered questions found)
+    const allBlocks = [];
+    for (let p = 0; p < totalPages; p++) {
+      const pageTxt = cleanText(parseRhwpJsonText(doc.getPageText(p)));
+      if (pageTxt) allBlocks.push({ type: "text", text: pageTxt });
+    }
+    const { questions, docTitle, headerLogo } = splitBlocksToQuestions(allBlocks);
+    const cnt = questions.length > 1 ? Math.max(5, questions.length) : 10;
+    const omrQs = [];
+    for (let i = 1; i <= cnt; i++) {
+      omrQs.push({
+        num: i, type: "choice", multi: false, prompt: `${i}번 문항`,
+        passage: "", choices: ["①", "②", "③", "④", "⑤"], images: [], answer: "1", points: 1, explain: ""
+      });
+    }
+    return {
+      mode: "omr_pages",
+      page_images: pageImages,
+      questions: omrQs,
+      suggested_title: docTitle || fallbackName,
+      header_logo: headerLogo,
+    };
+  } finally {
+    try { doc.free(); } catch (_) {}
+  }
+}
+
 async function handleFiles(fileList) {
   const files = Array.from(fileList);
   if (!files.length) return;
@@ -865,16 +1160,13 @@ async function handleFiles(fileList) {
   const ext = (first.name.split(".").pop() || "").toLowerCase();
   const status = document.getElementById("parseStatus");
 
-  if (ext === "hwp") {
-    alert("웹 버전에서는 구형 .hwp 파일을 직접 읽을 수 없습니다.\n한글 프로그램에서 [다른 이름으로 저장 → .hwpx 또는 .pdf]로 저장한 뒤 올려주세요!");
-    return;
-  }
-
   status.textContent = "브라우저에서 시험지 파일을 분석하는 중입니다...";
   showLoadingProgress("📄 시험지 파일 분석 중...", `${first.name} 읽는 중...`, 12);
   try {
     let parsed;
-    if (ext === "hwpx") {
+    if (ext === "hwp") {
+      parsed = await parseHwpFile(first, document.getElementById("forcePageMode").checked);
+    } else if (ext === "hwpx") {
       setLoadingProgress(35, "한글(.hwpx) 문항·그림을 추출하고 있습니다...");
       parsed = await parseHwpxFile(first);
     } else if (ext === "pdf") {
@@ -897,7 +1189,7 @@ async function handleFiles(fileList) {
         header_logo: "",
       };
     } else {
-      alert("지원하지 않는 형식입니다. (.hwpx, .pdf, .png, .jpg 지원)");
+      alert("지원하지 않는 형식입니다. (.hwp, .hwpx, .pdf, .png, .jpg 지원)");
       status.textContent = "";
       return;
     }
@@ -946,6 +1238,11 @@ async function loadExams() {
   }
   list.innerHTML = "";
   data.exams.forEach((ex) => {
+    const metaTags = [];
+    if (ex.time_limit_min > 0) metaTags.push(`⏱ ${ex.time_limit_min}분`);
+    if (ex.entry_pin) metaTags.push(`🔐 코드 ${ex.entry_pin}`);
+    if (ex.max_away_count > 0) metaTags.push(`🚨 ${ex.max_away_count}회 이탈제한`);
+    const extraMeta = metaTags.length ? ` · ${metaTags.join(" · ")}` : "";
     const div = document.createElement("div");
     div.className = "exam-item";
     div.innerHTML = `
@@ -954,10 +1251,10 @@ async function loadExams() {
           ${escapeHtml(ex.title)}
           <span class="badge ${ex.is_open ? "badge-open" : "badge-closed"}">${ex.is_open ? "배포 중" : "마감"}</span>
         </div>
-        <div class="exam-meta">${ex.question_count}문항 · 제출 ${ex.sub_count}명 · ${ex.updated_at}</div>
+        <div class="exam-meta">${ex.question_count}문항 · 제출 ${ex.sub_count}명${escapeHtml(extraMeta)} · ${ex.updated_at}</div>
       </div>
       <div class="exam-actions">
-        <button class="btn btn-primary btn-sm" onclick="showQrForExam('${ex.id}', '${escapeJs(ex.title)}')">☁️ QR 보기</button>
+        <button class="btn btn-primary btn-sm" onclick="showQrForExam('${ex.id}', '${escapeJs(ex.title)}', '${escapeJs(ex.entry_pin || "")}')">☁️ QR 보기</button>
         <button class="btn btn-green btn-sm" onclick="openResultsModal('${ex.id}', '${escapeJs(ex.title)}')">📊 결과 (${ex.sub_count})</button>
         <button class="btn btn-light btn-sm" onclick="previewSavedExam('${ex.id}')">👁 미리보기</button>
         <button class="btn btn-light btn-sm" onclick="editExam('${ex.id}')">편집</button>
@@ -969,11 +1266,30 @@ async function loadExams() {
   });
 }
 
+function syncPinInputUi() {
+  const usePin = document.getElementById("edUsePin").checked;
+  const pinInput = document.getElementById("edEntryPin");
+  pinInput.disabled = !usePin;
+  if (usePin && !pinInput.value.trim()) {
+    pinInput.value = String(Math.floor(1000 + Math.random() * 9000));
+  }
+}
+document.getElementById("edUsePin").addEventListener("change", syncPinInputUi);
+
 function openEditor(exam) {
   currentExam = JSON.parse(JSON.stringify(exam));
   document.getElementById("edTitle").value = currentExam.title || "";
   document.getElementById("edMode").value = currentExam.mode || "cards";
-  document.getElementById("edShowScore").checked = currentExam.show_score_to_student !== false;
+  const scoreMode = currentExam.score_mode || (currentExam.show_score_to_student === false ? "none" : "full");
+  document.getElementById("edScoreMode").value = scoreMode;
+  document.getElementById("edTimeLimit").value = String(Math.max(0, Number(currentExam.time_limit_min || 0)));
+  const pinVal = String(currentExam.entry_pin || "").trim();
+  document.getElementById("edUsePin").checked = Boolean(pinVal);
+  document.getElementById("edEntryPin").value = pinVal;
+  document.getElementById("edEntryPin").disabled = !pinVal;
+  const maxAwayVal = currentExam.max_away_count !== undefined ? String(currentExam.max_away_count) : "3";
+  const maxAwayEl = document.getElementById("edMaxAway");
+  maxAwayEl.value = ["0", "3", "5"].includes(maxAwayVal) ? maxAwayVal : "3";
   const logoWrap = document.getElementById("edLogoWrap");
   if (currentExam.header_logo) {
     logoWrap.style.display = "flex";
@@ -1025,7 +1341,7 @@ function renderEditorQuestions() {
       : "";
     const hasPages = Boolean(currentExam.page_images && currentExam.page_images.length);
     const cropBtnHtml = hasPages
-      ? `<button type="button" class="btn btn-light btn-sm" onclick="openCropModal(${idx})">✂️ PDF에서 오려 넣기</button>`
+      ? `<button type="button" class="btn btn-light btn-sm" onclick="openCropModal(${idx})">✂️ 원문에서 오려 넣기</button>`
       : "";
     const imgToolsHtml = `
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 8px;">
@@ -1386,7 +1702,18 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   const btn = document.getElementById("saveAndQrBtn");
   currentExam.title = document.getElementById("edTitle").value.trim() || "새 시험지";
   currentExam.mode = document.getElementById("edMode").value;
-  currentExam.show_score_to_student = document.getElementById("edShowScore").checked;
+  currentExam.score_mode = document.getElementById("edScoreMode").value || "full";
+  currentExam.show_score_to_student = currentExam.score_mode !== "none";
+  currentExam.time_limit_min = Math.max(0, parseInt(document.getElementById("edTimeLimit").value, 10) || 0);
+  const usePin = document.getElementById("edUsePin").checked;
+  const pinStr = usePin ? document.getElementById("edEntryPin").value.trim() : "";
+  if (usePin && !pinStr) {
+    alert("입장 코드(PIN)를 입력하거나 '수업 입장 코드 사용' 체크를 해제해 주세요.");
+    document.getElementById("edEntryPin").focus();
+    return;
+  }
+  currentExam.entry_pin = pinStr;
+  currentExam.max_away_count = Math.max(0, parseInt(document.getElementById("edMaxAway").value, 10) || 0);
   if (!currentExam.id) currentExam.id = Math.random().toString(36).slice(2, 10);
 
   btn.disabled = true;
@@ -1402,7 +1729,7 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
       return;
     }
     setLoadingProgress(94, "QR 코드를 생성하고 있습니다...");
-    await showQrForExam(currentExam.id, currentExam.title);
+    await showQrForExam(currentExam.id, currentExam.title, currentExam.entry_pin);
     setLoadingProgress(100, "QR 코드 발급 완료!");
     loadExams().catch((err) => console.error("background loadExams error:", err));
   } finally {
@@ -1452,11 +1779,20 @@ async function deleteExam(examId) {
 }
 
 /* ======================== QR & PREVIEW & RESULTS ======================== */
-function showQrForExam(examId, title) {
+function showQrForExam(examId, title, entryPin = "") {
   const baseViewer = getViewerUrl();
   const sep = baseViewer.includes("?") ? "&" : "?";
   const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}`;
   document.getElementById("qrExamTitle").textContent = title;
+  const pinBanner = document.getElementById("qrPinBanner");
+  if (pinBanner) {
+    if (entryPin) {
+      pinBanner.textContent = `🔐 수업 입장 코드: ${entryPin}`;
+      pinBanner.style.display = "inline-block";
+    } else {
+      pinBanner.style.display = "none";
+    }
+  }
   document.getElementById("qrUrlText").textContent = targetUrl;
   document.getElementById("previewExamLink").href = targetUrl;
   const qrImgEl = document.getElementById("qrImg");
@@ -1506,11 +1842,10 @@ function renderPreviewModal(examObj) {
   else { pvLogo.style.display = "none"; }
   document.getElementById("pvSaveBtn").style.display = isFromEditor ? "inline-flex" : "none";
 
-  let html = `<div class="pv-card"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.85rem;">
+  let html = `<div class="pv-card"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.85rem;">
     <div><b>학년</b><div style="border:1px solid var(--border);border-radius:6px;padding:6px;background:#f8fafc;color:var(--muted);">예: 6</div></div>
     <div><b>반</b><div style="border:1px solid var(--border);border-radius:6px;padding:6px;background:#f8fafc;color:var(--muted);">예: 1</div></div>
     <div><b>번호</b><div style="border:1px solid var(--border);border-radius:6px;padding:6px;background:#f8fafc;color:var(--muted);">예: 20</div></div>
-    <div><b>이름</b><div style="border:1px solid var(--border);border-radius:6px;padding:6px;background:#f8fafc;color:var(--muted);">이름 입력</div></div>
   </div></div>`;
   if (mode === "omr_pages" && target.page_images && target.page_images.length) {
     html += `<div class="pv-card">${target.page_images.map((u) => `<img src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
@@ -1563,13 +1898,21 @@ async function refreshResults() {
     body.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);">아직 제출한 학생이 없습니다.</div>`;
     return;
   }
+  const awayIdx = data.headers.indexOf("화면이탈");
+  const oxStart = data.headers.indexOf("100점환산") >= 0 ? data.headers.indexOf("100점환산") + 1 : 7;
   const ths = data.headers.map((h) => `<th style="background:var(--navy);color:#fff;padding:7px 9px;border:1px solid var(--border);white-space:nowrap;">${escapeHtml(h)}</th>`).join("");
   const trs = data.rows.map((row) => {
     const tds = row.map((cell, ci) => {
       const s = String(cell);
       let style = "padding:6px 9px;border:1px solid var(--border);text-align:center;white-space:nowrap;";
-      if (ci >= 8 && s.startsWith("O")) style += "background:var(--green-soft);color:var(--green);font-weight:700;";
-      else if (ci >= 8 && s.startsWith("X")) style += "background:var(--red-soft);color:var(--red);font-weight:700;";
+      if (ci === awayIdx) {
+        if (!/^0회\b/.test(s) && s !== "") style += "background:var(--red-soft);color:var(--red);font-weight:700;";
+        else style += "color:var(--green);font-weight:600;";
+      } else if (ci >= oxStart && /^O\b/.test(s)) {
+        style += "background:var(--green-soft);color:var(--green);font-weight:700;";
+      } else if (ci >= oxStart && /^X\b/.test(s)) {
+        style += "background:var(--red-soft);color:var(--red);font-weight:700;";
+      }
       return `<td style="${style}">${escapeHtml(s)}</td>`;
     }).join("");
     return `<tr>${tds}</tr>`;
