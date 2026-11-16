@@ -246,8 +246,9 @@
 
 <script>
 const CIRCLED = ["①", "②", "③", "④", "⑤"];
+const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbykvpnccwVJLeZDZDklKIuMgNS8PDWiGZ8m8gVT0mAUNeZmqM11n_4G1aok0OKDLFLn/exec";
 const params = new URLSearchParams(window.location.search);
-const API_URL = (params.get("api") || "").trim();
+const API_URL = (params.get("api") || DEFAULT_API_URL).trim();
 const EXAM_ID = (params.get("id") || "").trim();
 
 let EXAM = null;
