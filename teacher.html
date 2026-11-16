@@ -166,14 +166,14 @@
     <div class="auth-body">
       <div class="err-box" id="authErr"></div>
       <form id="loginForm">
-        <div class="field"><label>아이디</label><input id="loginUsername" type="text" required placeholder="교사 아이디" /></div>
-        <div class="field"><label>비밀번호</label><input id="loginPassword" type="password" required placeholder="비밀번호" /></div>
+        <div class="field"><label>아이디</label><input id="loginUsername" type="text" required autocomplete="username" placeholder="교사 아이디" /></div>
+        <div class="field"><label>비밀번호</label><input id="loginPassword" type="password" required autocomplete="current-password" placeholder="비밀번호" /></div>
         <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">로그인</button>
       </form>
       <form id="registerForm" style="display:none;">
-        <div class="field"><label>아이디 (영문 소문자·숫자 3자 이상)</label><input id="regUsername" type="text" required minlength="3" placeholder="예: teacher_kim" /></div>
+        <div class="field"><label>아이디 (영문 소문자·숫자 3자 이상)</label><input id="regUsername" type="text" required minlength="3" autocomplete="username" placeholder="예: teacher_kim" /></div>
         <div class="field"><label>표시 이름 (선생님 성함)</label><input id="regDisplay" type="text" required placeholder="예: 김선생님" /></div>
-        <div class="field"><label>비밀번호 (4자 이상)</label><input id="regPassword" type="password" required minlength="4" placeholder="비밀번호" /></div>
+        <div class="field"><label>비밀번호 (6자 이상 권장)</label><input id="regPassword" type="password" required minlength="4" autocomplete="new-password" placeholder="예: tg2026!@" /></div>
         <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">계정 만들기</button>
       </form>
       <div style="margin-top:12px;font-size:0.78rem;color:var(--muted);text-align:center;">
@@ -335,6 +335,28 @@
   </div>
 </div>
 
+<!-- PDF Region Crop Modal -->
+<div class="modal-backdrop" id="cropModal">
+  <div class="modal" style="max-width:920px;width:96%;max-height:92vh;overflow:auto;text-align:left;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <h2 style="margin:0;color:var(--navy);font-size:1.1rem;">✂️ PDF 페이지에서 그림 오려 넣기 <span id="cropTargetLabel" style="font-size:0.9rem;color:var(--blue);font-weight:600;"></span></h2>
+      <button type="button" class="btn btn-light btn-sm" id="closeCropBtn">닫기</button>
+    </div>
+    <p style="margin:0 0 8px;font-size:0.84rem;color:var(--muted);">페이지를 고른 뒤 원하는 그림 영역을 마우스(또는 손가락)로 드래그해서 선택하세요.</p>
+    <div id="cropPageTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+    <div style="background:#f1f5f9;padding:8px;border-radius:10px;text-align:center;max-height:58vh;overflow:auto;">
+      <canvas id="cropCanvas" style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:6px;cursor:crosshair;touch-action:none;display:inline-block;"></canvas>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;">
+      <span id="cropSelInfo" style="font-size:0.83rem;color:var(--muted);">드래그하여 영역을 선택해 주세요.</span>
+      <div style="display:flex;gap:8px;">
+        <button type="button" class="btn btn-light btn-sm" id="cancelCropBtn">취소</button>
+        <button type="button" class="btn btn-primary btn-sm" id="applyCropBtn" disabled>✂️ 선택 영역 이 문항에 넣기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbykvpnccwVJLeZDZDklKIuMgNS8PDWiGZ8m8gVT0mAUNeZmqM11n_4G1aok0OKDLFLn/exec";
 const DEFAULT_VIEWER_URL = new URL("index.html", window.location.href).href;
@@ -454,6 +476,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 function cleanText(text) {
   return String(text || "")
     .replace(/\u00a0/g, " ")
+    .replace(/[\uE000-\uF8FF]/g, "○")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
@@ -538,7 +561,7 @@ function splitBlocksToQuestions(blocks) {
     let qType = "short";
     if (keys.length) {
       const maxIdx = Math.max(...keys);
-      for (let i = 0; i <= maxIdx; i++) choices.push(current._choicesMap[i] || "");
+      for (let i = 0; i <= maxIdx; i++) choices.push(current._choicesMap[i] || CIRCLED[i] || `보기 ${i + 1}`);
       qType = "choice";
     } else {
       const mSlash = slashRe.exec(passage) || slashRe.exec(prompt);
@@ -974,6 +997,17 @@ function renderEditorQuestions() {
     const imgsHtml = (q.images && q.images.length)
       ? `<div class="img-thumbs">${q.images.map((u, ii) => `<div style="position:relative;"><img src="${u}" /><button type="button" onclick="removeImage(${idx}, ${ii})" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.65);color:#fff;border:none;border-radius:99px;width:20px;height:20px;cursor:pointer;">×</button></div>`).join("")}</div>`
       : "";
+    const hasPages = Boolean(currentExam.page_images && currentExam.page_images.length);
+    const cropBtnHtml = hasPages
+      ? `<button type="button" class="btn btn-light btn-sm" onclick="openCropModal(${idx})">✂️ PDF에서 오려 넣기</button>`
+      : "";
+    const imgToolsHtml = `
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 8px;">
+        <label class="btn btn-light btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">🖼️ 그림 파일 추가<input type="file" accept="image/*" multiple style="display:none;" onchange="addImagesFromFiles(${idx}, this)" /></label>
+        <button type="button" class="btn btn-light btn-sm" onclick="pasteImageFromClipboard(${idx})">📋 클립보드 붙여넣기</button>
+        ${cropBtnHtml}
+        <input type="text" readonly placeholder="여기를 클릭하고 Ctrl+V로 캡처 그림 붙여넣기" onpaste="handleImagePaste(${idx}, event)" style="flex:1;min-width:210px;padding:5px 9px;font-size:0.8rem;border:1px dashed var(--border);border-radius:7px;background:#f8fafc;color:var(--muted);cursor:text;" />
+      </div>`;
 
     card.innerHTML = `
       <div class="q-edit-top">
@@ -995,9 +1029,16 @@ function renderEditorQuestions() {
       <div class="field"><input type="text" value="${escapeHtml(q.prompt || "")}" placeholder="문제 질문" onchange="currentExam.questions[${idx}].prompt=this.value" /></div>
       <div class="field"><textarea rows="2" placeholder="지문/보기 박스 (선택)" onchange="currentExam.questions[${idx}].passage=this.value">${escapeHtml(q.passage || "")}</textarea></div>
       ${imgsHtml}
+      ${imgToolsHtml}
       ${choicesHtml}
       <div class="field" style="margin-top:8px;margin-bottom:0;"><input type="text" value="${escapeHtml(q.explain || "")}" placeholder="해설 (선택)" onchange="currentExam.questions[${idx}].explain=this.value" style="font-size:0.85rem;" /></div>
     `;
+    card.addEventListener("paste", (e) => {
+      const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+      if (items.some((it) => it.type && it.type.startsWith("image/"))) {
+        handleImagePaste(idx, e);
+      }
+    });
     list.appendChild(card);
   });
 }
@@ -1042,6 +1083,188 @@ function removeImage(qIdx, imgIdx) {
   currentExam.questions[qIdx].images.splice(imgIdx, 1);
   renderEditorQuestions();
 }
+async function appendImageSourceToQuestion(qIdx, blobOrDataUrl) {
+  const q = currentExam.questions[qIdx];
+  if (!q) return false;
+  if (!q.images) q.images = [];
+  const srcUrl = typeof blobOrDataUrl === "string"
+    ? blobOrDataUrl
+    : await new Promise((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result || "");
+        fr.onerror = () => resolve("");
+        fr.readAsDataURL(blobOrDataUrl);
+      });
+  if (!srcUrl) return false;
+  const compressed = await compressImageFromBlobOrCanvas(srcUrl, 760);
+  if (!compressed) return false;
+  q.images.push(compressed.url);
+  return true;
+}
+async function addImagesFromFiles(qIdx, inputEl) {
+  const files = Array.from((inputEl && inputEl.files) || []);
+  if (!files.length) return;
+  let added = 0;
+  for (const f of files) {
+    if (await appendImageSourceToQuestion(qIdx, f)) added++;
+  }
+  if (inputEl) inputEl.value = "";
+  if (added) renderEditorQuestions();
+}
+async function handleImagePaste(qIdx, event) {
+  const dt = event && event.clipboardData;
+  if (!dt) return;
+  const blobs = [];
+  for (const item of Array.from(dt.items || [])) {
+    if (item.type && item.type.startsWith("image/")) {
+      const f = item.getAsFile();
+      if (f) blobs.push(f);
+    }
+  }
+  if (!blobs.length && dt.files) {
+    for (const f of Array.from(dt.files)) {
+      if (f.type && f.type.startsWith("image/")) blobs.push(f);
+    }
+  }
+  if (!blobs.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  let added = 0;
+  for (const b of blobs) {
+    if (await appendImageSourceToQuestion(qIdx, b)) added++;
+  }
+  if (added) renderEditorQuestions();
+}
+async function pasteImageFromClipboard(qIdx) {
+  if (!navigator.clipboard || !navigator.clipboard.read) {
+    alert("이 브라우저에서는 버튼 붙여넣기가 제한되어 있습니다. 문항 안의 'Ctrl+V' 입력 칸을 클릭한 뒤 Ctrl+V를 눌러 주세요.");
+    return;
+  }
+  try {
+    const items = await navigator.clipboard.read();
+    let added = 0;
+    for (const item of items) {
+      const imgType = item.types.find((t) => t.startsWith("image/"));
+      if (imgType) {
+        const blob = await item.getType(imgType);
+        if (await appendImageSourceToQuestion(qIdx, blob)) added++;
+      }
+    }
+    if (added) renderEditorQuestions();
+    else alert("클립보드에 복사된 그림이 없습니다.\n화면 캡처(Win+Shift+S) 또는 그림 복사 후 다시 눌러 주세요.");
+  } catch (err) {
+    alert("클립보드 권한이 허용되지 않았습니다. 문항 안의 점선 입력 칸을 클릭하고 Ctrl+V를 눌러 붙여넣어 주세요.");
+  }
+}
+
+/* PDF Region Crop Modal */
+let cropTargetIdx = -1;
+let cropPageIdx = 0;
+let cropSourceImg = null;
+let cropDragging = false;
+let cropStart = null;
+let cropRect = null;
+
+function drawCropCanvas() {
+  const canvas = document.getElementById("cropCanvas");
+  const ctx = canvas.getContext("2d");
+  if (!cropSourceImg) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(cropSourceImg, 0, 0);
+  if (cropRect && cropRect.w > 2 && cropRect.h > 2) {
+    ctx.fillStyle = "rgba(15, 23, 42, 0.35)";
+    ctx.fillRect(0, 0, canvas.width, cropRect.y);
+    ctx.fillRect(0, cropRect.y + cropRect.h, canvas.width, canvas.height - (cropRect.y + cropRect.h));
+    ctx.fillRect(0, cropRect.y, cropRect.x, cropRect.h);
+    ctx.fillRect(cropRect.x + cropRect.w, cropRect.y, canvas.width - (cropRect.x + cropRect.w), cropRect.h);
+    ctx.strokeStyle = "#2563eb";
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+  }
+}
+function loadCropPage(pIdx) {
+  const pages = (currentExam && currentExam.page_images) || [];
+  if (!pages.length) return;
+  cropPageIdx = Math.max(0, Math.min(pIdx, pages.length - 1));
+  cropRect = null;
+  document.getElementById("applyCropBtn").disabled = true;
+  document.getElementById("cropSelInfo").textContent = "드래그하여 영역을 선택해 주세요.";
+  const tabs = document.getElementById("cropPageTabs");
+  tabs.innerHTML = pages.map((_, i) => `<button type="button" class="btn btn-sm ${i === cropPageIdx ? "btn-primary" : "btn-light"}" onclick="loadCropPage(${i})">${i + 1}쪽</button>`).join("");
+  const img = new Image();
+  img.onload = () => {
+    cropSourceImg = img;
+    const canvas = document.getElementById("cropCanvas");
+    canvas.width = img.width;
+    canvas.height = img.height;
+    drawCropCanvas();
+  };
+  img.src = pages[cropPageIdx];
+}
+function openCropModal(qIdx) {
+  const pages = (currentExam && currentExam.page_images) || [];
+  if (!pages.length) return alert("불러온 PDF 페이지 이미지가 없습니다.");
+  cropTargetIdx = qIdx;
+  const q = currentExam.questions[qIdx];
+  document.getElementById("cropTargetLabel").textContent = q ? `(${q.num}번 문항)` : "";
+  document.getElementById("cropModal").classList.add("show");
+  loadCropPage(cropPageIdx < pages.length ? cropPageIdx : 0);
+}
+function getCropCanvasPoint(e) {
+  const canvas = document.getElementById("cropCanvas");
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / Math.max(1, rect.width);
+  const sy = canvas.height / Math.max(1, rect.height);
+  return {
+    x: Math.max(0, Math.min(canvas.width, (e.clientX - rect.left) * sx)),
+    y: Math.max(0, Math.min(canvas.height, (e.clientY - rect.top) * sy)),
+  };
+}
+const cropCanvasEl = document.getElementById("cropCanvas");
+cropCanvasEl.addEventListener("pointerdown", (e) => {
+  if (!cropSourceImg) return;
+  cropDragging = true;
+  cropCanvasEl.setPointerCapture(e.pointerId);
+  cropStart = getCropCanvasPoint(e);
+  cropRect = { x: cropStart.x, y: cropStart.y, w: 0, h: 0 };
+  drawCropCanvas();
+});
+cropCanvasEl.addEventListener("pointermove", (e) => {
+  if (!cropDragging || !cropStart) return;
+  const pt = getCropCanvasPoint(e);
+  cropRect = {
+    x: Math.min(cropStart.x, pt.x),
+    y: Math.min(cropStart.y, pt.y),
+    w: Math.abs(pt.x - cropStart.x),
+    h: Math.abs(pt.y - cropStart.y),
+  };
+  drawCropCanvas();
+});
+cropCanvasEl.addEventListener("pointerup", () => {
+  if (!cropDragging) return;
+  cropDragging = false;
+  const valid = cropRect && cropRect.w >= 12 && cropRect.h >= 12;
+  document.getElementById("applyCropBtn").disabled = !valid;
+  document.getElementById("cropSelInfo").textContent = valid
+    ? `선택 영역: ${Math.round(cropRect.w)} × ${Math.round(cropRect.h)} px`
+    : "영역이 너무 작습니다. 다시 크게 드래그해 주세요.";
+});
+document.getElementById("closeCropBtn").addEventListener("click", () => document.getElementById("cropModal").classList.remove("show"));
+document.getElementById("cancelCropBtn").addEventListener("click", () => document.getElementById("cropModal").classList.remove("show"));
+document.getElementById("applyCropBtn").addEventListener("click", async () => {
+  if (cropTargetIdx < 0 || !cropSourceImg || !cropRect || cropRect.w < 12 || cropRect.h < 12) return;
+  const out = document.createElement("canvas");
+  out.width = Math.round(cropRect.w);
+  out.height = Math.round(cropRect.h);
+  out.getContext("2d").drawImage(
+    cropSourceImg,
+    Math.round(cropRect.x), Math.round(cropRect.y), Math.round(cropRect.w), Math.round(cropRect.h),
+    0, 0, out.width, out.height
+  );
+  const ok = await appendImageSourceToQuestion(cropTargetIdx, out.toDataURL("image/jpeg", 0.9));
+  document.getElementById("cropModal").classList.remove("show");
+  if (ok) renderEditorQuestions();
+});
 function deleteQuestion(idx) {
   if (currentExam.questions.length <= 1) return alert("최소 1문항 이상 있어야 합니다.");
   currentExam.questions.splice(idx, 1);
@@ -1104,7 +1327,8 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   btn.disabled = true;
   btn.textContent = "저장 중...";
   try {
-    const data = await apiCall({ action: "save_exam", exam: currentExam });
+    const examToSave = currentExam.mode === "cards" ? { ...currentExam, page_images: [] } : currentExam;
+    const data = await apiCall({ action: "save_exam", exam: examToSave });
     if (!data.ok) {
       alert(data.error || "저장에 실패했습니다.");
       return;
