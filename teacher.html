@@ -140,6 +140,12 @@
   .pv-card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
   .pv-passage { background: #f8fafc; border: 1px solid var(--border); border-left: 4px solid var(--navy); border-radius: 8px; padding: 10px 12px; margin: 8px 0; white-space: pre-line; font-size: 0.93rem; }
   .pv-choice { border: 1.5px solid var(--border); border-radius: 9px; padding: 9px 12px; margin-top: 6px; font-size: 0.93rem; background: #fff; }
+  .loading-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.58); z-index: 300; align-items: center; justify-content: center; padding: 18px; backdrop-filter: blur(2px); }
+  .loading-overlay.show { display: flex; }
+  .loading-card { background: #fff; border-radius: 16px; max-width: 420px; width: 100%; padding: 24px 26px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.28); }
+  .loading-bar-track { width: 100%; height: 12px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin: 14px 0 8px; }
+  .loading-bar-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, #2563eb 0%, #60a5fa 50%, #2563eb 100%); background-size: 200% 100%; animation: barShimmer 1.2s linear infinite; transition: width 0.25s ease; }
+  @keyframes barShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
   @media (max-width: 860px) { .grid-top { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -270,6 +276,7 @@
   <div class="modal" id="qrModalBox">
     <h2 id="qrExamTitle" style="margin:0 0 6px;color:var(--navy);"></h2>
     <div style="font-size:0.88rem;color:var(--muted);">학생들이 태블릿/스마트폰 카메라로 아래 QR코드를 스캔하면 바로 응시합니다.</div>
+    <div id="qrGeneratingMsg" style="display:none;padding:36px 0;color:var(--blue);font-weight:700;">⏳ QR 코드 이미지를 생성하고 있습니다...</div>
     <img id="qrImg" alt="시험지 QR코드" />
     <div class="url-box" id="qrUrlText"></div>
     <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px;">
@@ -353,6 +360,18 @@
         <button type="button" class="btn btn-light btn-sm" id="cancelCropBtn">취소</button>
         <button type="button" class="btn btn-primary btn-sm" id="applyCropBtn" disabled>✂️ 선택 영역 이 문항에 넣기</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Global Loading Bar Overlay -->
+<div class="loading-overlay" id="loadingOverlay" aria-live="polite">
+  <div class="loading-card">
+    <div id="loadingTitle" style="font-size:1.06rem;font-weight:800;color:var(--navy);">처리 중입니다...</div>
+    <div class="loading-bar-track"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.84rem;color:var(--muted);">
+      <span id="loadingSub">잠시만 기다려 주세요...</span>
+      <strong id="loadingPct" style="color:var(--blue);">0%</strong>
     </div>
   </div>
 </div>
@@ -782,6 +801,7 @@ async function parsePdfFile(file, forcePageMode) {
   const textBlocks = [];
 
   for (let p = 1; p <= pdf.numPages; p++) {
+    setLoadingProgress(Math.max(12, Math.round(((p - 1) / pdf.numPages) * 85)), `PDF ${p} / ${pdf.numPages}쪽 그림·텍스트 분석 중...`);
     const page = await pdf.getPage(p);
     const vp = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement("canvas");
@@ -851,16 +871,19 @@ async function handleFiles(fileList) {
   }
 
   status.textContent = "브라우저에서 시험지 파일을 분석하는 중입니다...";
+  showLoadingProgress("📄 시험지 파일 분석 중...", `${first.name} 읽는 중...`, 12);
   try {
     let parsed;
     if (ext === "hwpx") {
+      setLoadingProgress(35, "한글(.hwpx) 문항·그림을 추출하고 있습니다...");
       parsed = await parseHwpxFile(first);
     } else if (ext === "pdf") {
       parsed = await parsePdfFile(first, document.getElementById("forcePageMode").checked);
     } else if (["png", "jpg", "jpeg", "webp"].includes(ext)) {
       const pageImages = [];
-      for (const f of files) {
-        const info = await compressImageFromBlobOrCanvas(f, 920);
+      for (let fi = 0; fi < files.length; fi++) {
+        setLoadingProgress(Math.round(((fi + 1) / files.length) * 85), `이미지 ${fi + 1} / ${files.length} 처리 중...`);
+        const info = await compressImageFromBlobOrCanvas(files[fi], 920);
         if (info) pageImages.push(info.url);
       }
       parsed = {
@@ -879,6 +902,7 @@ async function handleFiles(fileList) {
       return;
     }
 
+    setLoadingProgress(100, "분석 완료!");
     status.textContent = `분석 완료! ${parsed.questions.length}개 문항을 확인한 뒤 저장하세요.`;
     openEditor({
       id: null,
@@ -893,6 +917,8 @@ async function handleFiles(fileList) {
   } catch (err) {
     status.textContent = "";
     alert("파일 분석 중 오류가 발생했습니다: " + err.message);
+  } finally {
+    hideLoadingProgress();
   }
 }
 
@@ -1317,6 +1343,45 @@ document.getElementById("sampleBtn").addEventListener("click", () => {
   });
 });
 
+let loadingCreepTimer = null;
+let loadingCurrentPct = 0;
+
+function setLoadingProgress(pct, subText) {
+  loadingCurrentPct = Math.max(0, Math.min(100, Math.round(pct)));
+  const fill = document.getElementById("loadingBarFill");
+  const pctEl = document.getElementById("loadingPct");
+  const subEl = document.getElementById("loadingSub");
+  if (fill) fill.style.width = `${loadingCurrentPct}%`;
+  if (pctEl) pctEl.textContent = `${loadingCurrentPct}%`;
+  if (subText && subEl) subEl.textContent = subText;
+}
+function creepLoadingProgress(targetPct, baseSub) {
+  if (loadingCreepTimer) { clearInterval(loadingCreepTimer); loadingCreepTimer = null; }
+  const startedAt = Date.now();
+  loadingCreepTimer = setInterval(() => {
+    const sec = Math.floor((Date.now() - startedAt) / 1000);
+    if (loadingCurrentPct < targetPct) {
+      const step = Math.max(1, Math.ceil((targetPct - loadingCurrentPct) * 0.14));
+      loadingCurrentPct = Math.min(targetPct, loadingCurrentPct + step);
+    }
+    const secNote = sec >= 2 ? ` (${sec}초 경과)` : "...";
+    setLoadingProgress(loadingCurrentPct, `${baseSub}${secNote}`);
+  }, 300);
+}
+function showLoadingProgress(title, sub, pct = 10) {
+  if (loadingCreepTimer) { clearInterval(loadingCreepTimer); loadingCreepTimer = null; }
+  const titleEl = document.getElementById("loadingTitle");
+  const ov = document.getElementById("loadingOverlay");
+  if (titleEl) titleEl.textContent = title;
+  setLoadingProgress(pct, sub);
+  if (ov) ov.classList.add("show");
+}
+function hideLoadingProgress() {
+  if (loadingCreepTimer) { clearInterval(loadingCreepTimer); loadingCreepTimer = null; }
+  const ov = document.getElementById("loadingOverlay");
+  if (ov) ov.classList.remove("show");
+}
+
 document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   const btn = document.getElementById("saveAndQrBtn");
   currentExam.title = document.getElementById("edTitle").value.trim() || "새 시험지";
@@ -1325,30 +1390,56 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   if (!currentExam.id) currentExam.id = Math.random().toString(36).slice(2, 10);
 
   btn.disabled = true;
-  btn.textContent = "저장 중...";
+  btn.textContent = "저장·발급 중...";
+  showLoadingProgress("☁️ 저장하고 QR 발급 중...", "구글 시트에 시험지를 저장하고 있습니다...", 12);
+  creepLoadingProgress(62, "구글 시트에 시험지를 저장하고 있습니다");
   try {
     const examToSave = currentExam.mode === "cards" ? { ...currentExam, page_images: [] } : currentExam;
     const data = await apiCall({ action: "save_exam", exam: examToSave });
     if (!data.ok) {
+      hideLoadingProgress();
       alert(data.error || "저장에 실패했습니다.");
       return;
     }
+    setLoadingProgress(68, "시험 목록을 새로고침하고 있습니다...");
+    creepLoadingProgress(88, "시험 목록을 동기화하고 있습니다");
     await loadExams();
-    showQrForExam(currentExam.id, currentExam.title);
+    setLoadingProgress(94, "QR 코드를 생성하고 있습니다...");
+    await showQrForExam(currentExam.id, currentExam.title);
+    setLoadingProgress(100, "QR 코드 발급 완료!");
   } finally {
+    hideLoadingProgress();
     btn.disabled = false;
     btn.textContent = "☁️ 저장하고 QR 발급";
   }
 });
 
 async function editExam(examId) {
-  const data = await apiCall({ action: "get_exam_full", id: examId });
-  if (!data.ok) return alert(data.error || "불러오기 실패");
-  openEditor(data.exam);
+  showLoadingProgress("📥 시험지 불러오는 중...", "구글 시트에서 문항을 불러오고 있습니다...", 20);
+  creepLoadingProgress(85, "구글 시트에서 문항을 불러오고 있습니다");
+  try {
+    const data = await apiCall({ action: "get_exam_full", id: examId });
+    if (!data.ok) return alert(data.error || "불러오기 실패");
+    setLoadingProgress(100, "불러오기 완료!");
+    openEditor(data.exam);
+  } finally {
+    hideLoadingProgress();
+  }
 }
 async function previewSavedExam(examId) {
-  const data = await apiCall({ action: "get_exam_full", id: examId });
-  if (data.ok) renderPreviewModal(data.exam);
+  showLoadingProgress("👁 미리보기 준비 중...", "시험지를 불러오고 있습니다...", 25);
+  creepLoadingProgress(85, "시험지를 불러오고 있습니다");
+  try {
+    const data = await apiCall({ action: "get_exam_full", id: examId });
+    if (data.ok) {
+      setLoadingProgress(100, "완료!");
+      renderPreviewModal(data.exam);
+    } else {
+      alert(data.error || "불러오기 실패");
+    }
+  } finally {
+    hideLoadingProgress();
+  }
 }
 async function toggleExam(examId, isOpen) {
   const data = await apiCall({ action: "toggle_exam", id: examId, is_open: isOpen });
@@ -1370,13 +1461,24 @@ function showQrForExam(examId, title) {
   document.getElementById("qrExamTitle").textContent = title;
   document.getElementById("qrUrlText").textContent = targetUrl;
   document.getElementById("previewExamLink").href = targetUrl;
-  QRCode.toDataURL(targetUrl, { width: 320, margin: 2 }, (err, dataUrl) => {
-    if (err) return alert("QR 생성 오류: " + err);
-    document.getElementById("qrImg").src = dataUrl;
-    document.getElementById("qrDownloadLink").href = dataUrl;
-  });
+  const qrImgEl = document.getElementById("qrImg");
+  const qrGenMsg = document.getElementById("qrGeneratingMsg");
+  if (qrImgEl) { qrImgEl.removeAttribute("src"); qrImgEl.style.display = "none"; }
+  if (qrGenMsg) qrGenMsg.style.display = "block";
   document.getElementById("qrModalBox").classList.remove("fullscreen");
   document.getElementById("qrModal").classList.add("show");
+  return new Promise((resolve) => {
+    QRCode.toDataURL(targetUrl, { width: 320, margin: 2 }, (err, dataUrl) => {
+      if (qrGenMsg) qrGenMsg.style.display = "none";
+      if (err) {
+        alert("QR 생성 오류: " + err);
+        return resolve();
+      }
+      if (qrImgEl) { qrImgEl.src = dataUrl; qrImgEl.style.display = "block"; }
+      document.getElementById("qrDownloadLink").href = dataUrl;
+      resolve();
+    });
+  });
 }
 
 document.getElementById("qrFullscreenBtn").addEventListener("click", () => document.getElementById("qrModalBox").classList.toggle("fullscreen"));
