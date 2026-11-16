@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>온라인 시험지</title>
+<style>
+  :root {
+    --navy: #1e3a5f;
+    --blue: #2563eb;
+    --blue-soft: #eff6ff;
+    --green: #15803d;
+    --green-soft: #dcfce7;
+    --red: #b91c1c;
+    --red-soft: #fee2e2;
+    --slate: #0f172a;
+    --muted: #475569;
+    --border: #cbd5e1;
+    --bg: #f1f5f9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--slate);
+    line-height: 1.55;
+    padding-bottom: 64px;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: var(--navy);
+    color: #fff;
+    padding: 12px 18px;
+  }
+  .topbar-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .topbar h1 { margin: 0; font-size: 1.1rem; }
+  .pill {
+    background: rgba(255,255,255,0.18);
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .container {
+    max-width: 900px;
+    margin: 18px auto;
+    padding: 0 14px;
+  }
+  .card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 14px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.04);
+  }
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .field label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .field input {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-family: inherit;
+    background: #f8fafc;
+  }
+  .passage {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--navy);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    white-space: pre-line;
+    font-size: 0.96rem;
+  }
+  .q-imgs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 10px 0;
+  }
+  .q-imgs img {
+    max-width: 100%;
+    max-height: 220px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .choices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .choice-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 11px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 0.96rem;
+    cursor: pointer;
+    color: var(--slate);
+  }
+  .choice-btn.selected {
+    border-color: var(--blue);
+    background: var(--blue-soft);
+    font-weight: 700;
+  }
+  .check-box {
+    width: 22px;
+    height: 22px;
+    border: 2px solid #94a3b8;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .choice-btn.selected .check-box {
+    background: var(--blue);
+    border-color: var(--blue);
+  }
+  .short-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    font-size: 1rem;
+    font-family: inherit;
+    margin-top: 8px;
+  }
+  .omr-pages-wrap img {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    background: #fff;
+  }
+  .omr-pad-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid #e2e8f0;
+    flex-wrap: wrap;
+  }
+  .omr-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .omr-pill {
+    width: 40px;
+    height: 38px;
+    border-radius: 9px;
+    border: 1.5px solid var(--border);
+    background: #fff;
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  .omr-pill.selected {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+  }
+  .submit-bar { text-align: center; margin-top: 22px; }
+  .btn-submit {
+    background: var(--navy);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 14px 36px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .result-banner { display: none; border: 2px solid var(--navy); background: #f8fbff; }
+  .result-banner.show { display: block; }
+  .ox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .ox-item {
+    border-radius: 9px;
+    padding: 8px 6px;
+    text-align: center;
+    font-weight: 800;
+    font-size: 0.9rem;
+  }
+  .ox-item.ok { background: var(--green-soft); color: var(--green); }
+  .ox-item.bad { background: var(--red-soft); color: var(--red); }
+  @media (max-width: 640px) {
+    .info-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <img id="headerLogo" alt="로고" style="display:none;height:34px;border-radius:6px;background:#fff;padding:2px;" />
+      <h1 id="examTitle">시험지 불러오는 중...</h1>
+    </div>
+    <div class="pill" id="progressPill">-</div>
+  </div>
+</header>
+
+<main class="container" id="mainRoot">
+  <div class="card" id="loadingBox" style="text-align:center;padding:42px 20px;color:var(--muted);font-weight:600;">
+    시험지를 불러오는 중입니다. 잠시만 기다려 주세요...
+  </div>
+</main>
+
+<script>
+const CIRCLED = ["①", "②", "③", "④", "⑤"];
+const params = new URLSearchParams(window.location.search);
+const API_URL = (params.get("api") || "").trim();
+const EXAM_ID = (params.get("id") || "").trim();
+
+let EXAM = null;
+const answers = {};
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function updateProgress() {
+  if (!EXAM) return;
+  const cnt = EXAM.questions.filter((q) => {
+    const v = answers[String(q.num)];
+    return v !== undefined && String(v).trim() !== "";
+  }).length;
+  document.getElementById("progressPill").textContent = `응답: ${cnt} / ${EXAM.questions.length}`;
+}
+
+function pickChoice(qNum, val, len, isMulti, prefix) {
+  const key = String(qNum);
+  if (isMulti) {
+    const set = new Set((answers[key] || "").split(",").map((s) => s.trim()).filter(Boolean));
+    if (set.has(val)) set.delete(val);
+    else set.add(val);
+    answers[key] = Array.from(set).sort((a, b) => Number(a) - Number(b)).join(",");
+  } else {
+    answers[key] = answers[key] === val ? "" : val;
+  }
+  const activeSet = new Set((answers[key] || "").split(",").map((s) => s.trim()).filter(Boolean));
+  for (let i = 1; i <= len; i++) {
+    const btn = document.getElementById(`${prefix}-${qNum}-${i}`);
+    if (btn) btn.classList.toggle("selected", activeSet.has(String(i)));
+  }
+  updateProgress();
+}
+
+function setShort(qNum, val) {
+  answers[String(qNum)] = val;
+  updateProgress();
+}
+
+async function init() {
+  const root = document.getElementById("mainRoot");
+  if (!API_URL || !EXAM_ID) {
+    root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;">
+      <h2 style="color:var(--navy);margin:0 0 8px;">공용 QR 시험지 뷰어</h2>
+      <p style="color:var(--muted);margin:0;">선생님이 안내한 QR코드를 스캔해 접속해 주세요. (주소 파라미터 <code>api</code>와 <code>id</code>가 필요합니다.)</p>
+    </div>`;
+    return;
+  }
+
+  try {
+    const url = `${API_URL}${API_URL.includes("?") ? "&" : "?"}action=get_exam&id=${encodeURIComponent(EXAM_ID)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.ok || !data.exam) {
+      root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;color:var(--red);font-weight:700;">${escapeHtml(data.error || "시험지를 찾을 수 없습니다.")}</div>`;
+      return;
+    }
+
+    EXAM = data.exam;
+    document.title = EXAM.title;
+    document.getElementById("examTitle").textContent = EXAM.title;
+    if (EXAM.header_logo) {
+      const logo = document.getElementById("headerLogo");
+      logo.src = EXAM.header_logo;
+      logo.style.display = "inline-block";
+    }
+
+    if (!EXAM.is_open) {
+      root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;"><h2 style="color:var(--red);margin:0 0 8px;">응시가 마감된 시험지입니다.</h2><p style="color:var(--muted);margin:0;">선생님께 문의해 주세요.</p></div>`;
+      return;
+    }
+
+    root.innerHTML = `
+      <section class="card">
+        <div class="info-grid">
+          <div class="field"><label>학년</label><input id="grade" type="text" placeholder="예: 6" /></div>
+          <div class="field"><label>반</label><input id="classNum" type="text" placeholder="예: 1" /></div>
+          <div class="field"><label>번호</label><input id="studentNum" type="text" placeholder="예: 20" /></div>
+          <div class="field"><label>이름 (필수)</label><input id="studentName" type="text" placeholder="이름 입력" /></div>
+        </div>
+      </section>
+      <section class="card result-banner" id="resultBanner"></section>
+      <div id="examBody"></div>
+      <div class="submit-bar" id="submitBar">
+        <button type="button" class="btn-submit" id="submitBtn">답안 제출하기</button>
+      </div>
+    `;
+
+    renderQuestions();
+    updateProgress();
+    document.getElementById("submitBtn").addEventListener("click", submitExam);
+  } catch (err) {
+    root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;color:var(--red);">시험지를 불러오지 못했습니다. 네트워크 연결 또는 선생님 주소를 확인해 주세요.</div>`;
+  }
+}
+
+function renderQuestions() {
+  const body = document.getElementById("examBody");
+  if (EXAM.mode === "omr_pages" && EXAM.page_images && EXAM.page_images.length) {
+    const pagesCard = document.createElement("section");
+    pagesCard.className = "card omr-pages-wrap";
+    pagesCard.innerHTML = `<h3 style="margin:0 0 10px;color:var(--navy);">시험지 원문</h3>` +
+      EXAM.page_images.map((u, idx) => `<img src="${u}" alt="시험지 ${idx + 1}쪽" />`).join("");
+    body.appendChild(pagesCard);
+
+    const omrCard = document.createElement("section");
+    omrCard.className = "card";
+    omrCard.innerHTML = `<h3 style="margin:0 0 8px;color:var(--navy);">OMR 답안 입력</h3>`;
+    EXAM.questions.forEach((q) => {
+      const row = document.createElement("div");
+      row.className = "omr-pad-row";
+      if (q.type === "short") {
+        row.innerHTML = `<strong>${q.num}번 ${q.prompt ? "· " + escapeHtml(q.prompt) : ""}</strong><input type="text" class="short-input" style="max-width:260px;margin:0;" placeholder="정답 입력" oninput="setShort('${q.num}', this.value)" />`;
+      } else {
+        const pills = q.choices.map((c, ci) => {
+          const val = String(ci + 1);
+          return `<button type="button" class="omr-pill" id="omr-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', ${q.choices.length}, ${Boolean(q.multi)}, 'omr')">${CIRCLED[ci] || val}</button>`;
+        }).join("");
+        row.innerHTML = `<strong>${q.num}번 ${q.multi ? "<small style='color:var(--blue);'>(복수)</small>" : ""}</strong><div class="omr-pills">${pills}</div>`;
+      }
+      omrCard.appendChild(row);
+    });
+    body.appendChild(omrCard);
+    return;
+  }
+
+  EXAM.questions.forEach((q) => {
+    const card = document.createElement("section");
+    card.className = "card";
+    let html = `<div style="font-weight:700;font-size:1.02rem;white-space:pre-line;"><span style="color:var(--navy);margin-right:6px;">${q.num}.</span>${escapeHtml(q.prompt)}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
+    if (q.passage) html += `<div class="passage">${escapeHtml(q.passage)}</div>`;
+    if (q.images && q.images.length) {
+      html += `<div class="q-imgs">${q.images.map((u) => `<img src="${u}" alt="${q.num}번 그림" />`).join("")}</div>`;
+    }
+    if (q.type === "short") {
+      html += `<input type="text" class="short-input" placeholder="답을 입력하세요" oninput="setShort('${q.num}', this.value)" />`;
+    } else {
+      html += `<div class="choices">` + q.choices.map((c, ci) => {
+        const val = String(ci + 1);
+        return `
+          <button type="button" class="choice-btn" id="ch-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', ${q.choices.length}, ${Boolean(q.multi)}, 'ch')">
+            <span class="check-box">✓</span>
+            <span style="font-weight:700;color:var(--muted);">${CIRCLED[ci] || val}</span>
+            <span>${escapeHtml(c)}</span>
+          </button>
+        `;
+      }).join("") + `</div>`;
+    }
+    card.innerHTML = html;
+    body.appendChild(card);
+  });
+}
+
+async function submitExam() {
+  const name = document.getElementById("studentName").value.trim();
+  if (!name) {
+    alert("이름을 입력해 주세요.");
+    document.getElementById("studentName").focus();
+    return;
+  }
+  const unanswered = EXAM.questions.filter((q) => !String(answers[String(q.num)] || "").trim()).map((q) => q.num);
+  if (unanswered.length && !confirm(`아직 풀지 않은 문항(${unanswered.join("번, ")}번)이 있습니다.\n그대로 제출할까요?`)) {
+    return;
+  }
+
+  const btn = document.getElementById("submitBtn");
+  btn.disabled = true;
+  btn.textContent = "제출 중...";
+
+  try {
+    // Use text/plain to avoid CORS preflight OPTIONS on Google Apps Script
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "submit",
+        exam_id: EXAM.id,
+        grade: document.getElementById("grade").value.trim(),
+        class_num: document.getElementById("classNum").value.trim(),
+        student_num: document.getElementById("studentNum").value.trim(),
+        student_name: name,
+        answers
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert(data.error || "제출에 실패했습니다.");
+      btn.disabled = false;
+      btn.textContent = "답안 제출하기";
+      return;
+    }
+
+    document.getElementById("submitBar").style.display = "none";
+    document.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+    const banner = document.getElementById("resultBanner");
+
+    if (data.show_score) {
+      const pct = data.total_possible ? Math.round((data.total_earned / data.total_possible) * 1000) / 10 : 0;
+      const oxHtml = data.details.map((d) => `
+        <div class="ox-item ${d.is_correct ? "ok" : "bad"}">
+          <div style="font-size:0.78rem;">${d.num}번</div>
+          <div>${d.is_correct ? "O" : "X"}</div>
+        </div>
+      `).join("");
+      const expHtml = data.details.map((d) => `
+        <div style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:0.88rem;">
+          <strong>${d.num}번</strong> · 내 답: <b>${escapeHtml(d.picked || "미응답")}</b> · 정답: <b style="color:var(--green);">${escapeHtml(d.correct)}</b>
+          ${d.explain ? `<div style="color:var(--muted);margin-top:2px;">${escapeHtml(d.explain)}</div>` : ""}
+        </div>
+      `).join("");
+      banner.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <div>
+            <div style="font-size:1.15rem;font-weight:800;color:var(--navy);">제출 및 채점이 완료되었습니다!</div>
+            <div style="font-size:0.88rem;color:var(--muted);">제출 시각: ${data.submitted_at}</div>
+          </div>
+          <div style="font-size:1.7rem;font-weight:800;color:var(--blue);">${data.total_earned} / ${data.total_possible}점 (${pct}점)</div>
+        </div>
+        <div class="ox-grid">${oxHtml}</div>
+        <div style="margin-top:14px;border-top:1px solid var(--border);">${expHtml}</div>
+      `;
+    } else {
+      banner.innerHTML = `<div style="text-align:center;padding:12px 0;"><div style="font-size:1.2rem;font-weight:800;color:var(--green);">답안이 정상적으로 제출되었습니다!</div><div style="font-size:0.9rem;color:var(--muted);margin-top:4px;">제출 시각: ${data.submitted_at}</div></div>`;
+    }
+    banner.classList.add("show");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (err) {
+    alert("제출 중 네트워크 오류가 발생했습니다. 다시 시도해 주세요.");
+    btn.disabled = false;
+    btn.textContent = "답안 제출하기";
+  }
+}
+
+init();
+</script>
+</body>
+</html>
