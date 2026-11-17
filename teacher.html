@@ -296,7 +296,7 @@
 
     <div class="fast-answer-bar">
       <strong style="font-size:0.88rem;color:var(--navy);">⚡ 빠른 정답 일괄 입력:</strong>
-      <input id="fastAnswersInput" type="text" placeholder="예: 2, 2, 3, 2, 4, 2, 4, 2, 3, 2, 5, 2" />
+      <input id="fastAnswersInput" type="text" placeholder="문항은 쉼표로 구분 · 예: 2, O/X, 1/3, 정답" />
       <button type="button" class="btn btn-blue btn-sm" id="applyFastAnswersBtn">1번부터 적용</button>
       <button type="button" class="btn btn-light btn-sm" id="addQuestionBtn">+ 문항 추가</button>
     </div>
@@ -586,6 +586,128 @@ function extractInlineChoices(line) {
   return { prefix, found };
 }
 
+function questionContent(q) {
+  const prompt = String(q.prompt || "").trim(), passage = String(q.passage || "").trim();
+  return passage && !prompt.includes(passage) ? [prompt, passage].filter(Boolean).join("\n\n") : (prompt || passage);
+}
+
+function isStructuredQuestion(q) { return ["ox", "matching", "blanks"].includes(q.type); }
+
+function judgmentValue(value) {
+  const text = String(value ?? "").normalize("NFKC").replace(/\s+/g, "").replace(/표$/, "").toLowerCase();
+  if (["o","0","○","◯","〇","⭕","true","t","참","맞음","맞다"].includes(text)) return "O";
+  if (["x","×","☓","✕","✖","❌","false","f","거짓","틀림","틀리다"].includes(text)) return "X";
+  return "";
+}
+
+function responseValues(q, raw = q.answer) {
+  if (Array.isArray(raw)) return raw.map((v)=>String(v ?? ""));
+  const text = String(raw ?? "").trim();
+  try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) return parsed.map((v)=>String(v ?? "")); } catch (_) {}
+  return text ? text.split(/[,;\/]+/).map((v)=>v.trim()) : [];
+}
+
+function subpartLabels(text) {
+  return [...new Set([...text.matchAll(/(?:^|[\n ])\((\d{1,2}|[가-하]|[a-zA-Z])\)(?=\s|$)/g)].map((m)=>`(${m[1]})`))];
+}
+
+function prepareQuestion(q, infer = false) {
+  q.prompt = questionContent(q);
+  q.passage = "";
+  q.choices = Array.isArray(q.choices) ? q.choices : [];
+  q.images = Array.isArray(q.images) ? q.images : [];
+  q.type = q.type || (q.choices.length ? "choice" : "short");
+  const text = q.prompt;
+  const responseText = q._localContent || text;
+  const labels = subpartLabels(responseText);
+  const instruction = text.split("\n").slice(0, 4).join(" ");
+  if (infer && !isStructuredQuestion(q)) {
+    const connection = /연결|(?:선|줄)을?\s*(?:긋|그어|이어)/.test(instruction);
+    if(connection && !q.choices.length) {
+      const targets=[...text.matchAll(/(?:^|\n)\s*([A-Z가-하])[.)]\s+([^\n]+)/g)];
+      if(targets.length>=2)q.choices=targets.map((m)=>`${m[1]}. ${m[2].trim()}`);
+    }
+    const pair = q.choices.length === 2 && new Set(q.choices.map(judgmentValue)).size === 2 && q.choices.every((c)=>judgmentValue(c));
+    const tf = /\b(?:true\s*(?:or|\/)\s*false|T\s*\/\s*F)\b/i.test(instruction) || (/\bT\b[\s\S]*\bF\b/i.test(text) &&
+      (/일치|참|거짓|true|false/i.test(instruction) || /\bT\b\s*(?:또는|\/|,)\s*\bF\b/i.test(instruction)) && /일치|판단|고르|선택|표/.test(instruction));
+    const ox = /[○◯〇⭕]/.test(text) && /[×☓✕✖❌]/.test(text) && /일치|옳|맞|판단|고르|선택|표/.test(instruction);
+    const literalOX = (/(?:\bO\b|Ｏ)[\s,\/또는과와·]*(?:\bX\b|Ｘ)/i.test(instruction) && /일치|옳|맞|판단|문제|표|고르/.test(instruction)) || /\bO\s*[/·]?\s*X\s*(?:문제|퀴즈|표시|판단)/i.test(instruction) || (/\bO\s*(?:\/|or)\s*X\b/i.test(instruction) && /choose|circle|mark/i.test(instruction));
+    if (pair || tf || ox || literalOX) {
+      const oldChoices = [...q.choices];
+      const oldAnswer = String(q.answer || "");
+      const useTF=tf || (pair && oldChoices.every((c)=>/^[TF]$/i.test(String(c).trim())));
+      q.type = "ox";
+      q.choices = useTF ? ["T","F"] : ["O","X"];
+      q.response_items = (labels.length >= 2 ? labels : ["답"]).map((label)=>({label}));
+      if (oldAnswer && pair && /^\d$/.test(oldAnswer)) {
+        const value = judgmentValue(oldChoices[Number(oldAnswer)-1]);
+        q.answer = JSON.stringify([useTF ? (value === "O" ? "T" : "F") : value]);
+      }
+    } else if (connection && q.choices.length >= 2) {
+      q.type = "matching";
+      q.response_items = (labels.length ? labels : ["연결할 보기"]).map((label)=>({label}));
+    } else {
+      const alternatives = [...responseText.matchAll(/\(\s*([^()/\n]{1,50}?)\s*\/\s*([^()/\n]{1,50}?)\s*\)/g)];
+      const comparison = /[<＜]\s*(?:또는|와|과|\/|,)\s*[>＞]/.test(instruction) && /표시|쓰|넣|고르/.test(instruction);
+      const blankCount = responseText.split("\n").filter((line)=>!/^\s*[_＿…]+\s*$/.test(line))
+        .join("\n").match(/[_＿]{2,}|\(\s*\)/g)?.length || 0;
+      if (comparison && q.type === "short") {
+        q.type = "blanks";
+        q.response_items = [{label:"비교 기호",choices:["<",">"]}];
+      } else if (alternatives.length >= 2 && !q._explicitChoices) {
+        q.type = "blanks";
+        q.response_items = alternatives.map((m,i)=>({label:`빈칸 ${i+1}`,choices:[m[1].trim(),m[2].trim()]}));
+      } else if (q.type === "short" && (labels.length >= 2 || blankCount >= 2)) {
+        q.type = "blanks";
+        q.response_items = (labels.length >= 2 ? labels : Array.from({length:Math.min(blankCount,30)},(_,i)=>`빈칸 ${i+1}`)).map((label)=>({label}));
+      }
+    }
+  }
+  delete q._explicitChoices;
+  delete q._localContent;
+  if (isStructuredQuestion(q)) {
+    q.multi = false;
+    q.response_items = (q.response_items?.length ? q.response_items : [{label:"답"}]).map((item,i)=>({
+      label:String(item.label || `답 ${i+1}`), ...(item.text ? {text:String(item.text)} : {}),
+      ...(Array.isArray(item.choices) ? {choices:item.choices.map(String)} : {})
+    }));
+    if (q.type === "ox") {
+      q.choices = String(q.choices[0]).toUpperCase()==="T" && String(q.choices[1]).toUpperCase()==="F" ? ["T","F"] : ["O","X"];
+      q.prompt = q.prompt.replace(/\uF000/g,"□");
+    }
+    const values = responseValues(q);
+    q.answer = JSON.stringify(q.response_items.map((_,i)=>{
+      const value=values[i] || "";
+      if(q.type!=="ox" || !value)return value;
+      const key=judgmentValue(String(value).split("|")[0]);
+      return key ? q.choices[key==="O"?0:1] : value;
+    }));
+    q.partial_credit = Boolean(q.partial_credit);
+  }
+  return q;
+}
+
+function prepareParsedExam(parsed) {
+  parsed.questions.forEach((q)=>prepareQuestion(q,false));
+  (parsed.variants || []).forEach((v)=>v.questions.forEach((q)=>prepareQuestion(q,false)));
+  return parsed;
+}
+
+function bulkAnswerValue(q, text) {
+  if(!isStructuredQuestion(q))return text;
+  const values=text.split("/").map((s)=>s.trim());
+  if(values.length!==q.response_items.length)throw new Error(`${q.num}번은 답칸 ${q.response_items.length}개의 정답을 /로 구분해 주세요.`);
+  return JSON.stringify(values.map((value)=>{
+    if(q.type==="ox") {
+      const key=judgmentValue(value);
+      if(!key)throw new Error(`${q.num}번 OX/T·F 정답을 확인해 주세요.`);
+      return q.choices[key==="O"?0:1];
+    }
+    if(q.type==="matching" && (!/^\d+$/.test(value) || Number(value)<1 || Number(value)>q.choices.length))throw new Error(`${q.num}번 연결 보기 번호를 확인해 주세요.`);
+    return value;
+  }));
+}
+
 function splitBlocksToQuestions(blocks) {
   const qStartRe = /^\s*(?:(?:문(?:제)?\s*)?(\d{1,3})\s*[.)\]:：]|(\d{1,3})\s*번(?=\s|[.)]|$)(?:\s*[.)])?|(\d{1,3})[ \t]+)\s*(.*)$/;
   const groupRe = /^\s*\[\s*(\d{1,3})\s*[~～\-–]\s*(\d{1,3})\s*\]\s*(.*)$/;
@@ -652,9 +774,11 @@ function splitBlocksToQuestions(blocks) {
       passage,
       choices,
       images: mergedImgs,
-      answer: qType === "choice" ? "1" : "",
+      answer: "",
       points: 1,
       explain: "",
+      _explicitChoices: keys.length > 0,
+      _localContent: `${current.prompt}\n${current.passageLines.join("\n")}`,
     };
     questions.push(question);
     if (grp && /연결/.test(`${grp.prompt} ${grp.passageLines.join(" ")}`)) {
@@ -747,7 +871,12 @@ function splitBlocksToQuestions(blocks) {
 
       // In O/X and T/F tasks, (1), (2) label separate answer blanks,
       // not alternative answers to one multiple-choice question.
-      if (/^\([1-5]\)/.test(line) && /[○◯×☓]|\bT\b.*\bF\b/.test(`${current.prompt}\n${current.passageLines.join("\n")}`)) {
+      const questionContext=[current.prompt,...current.passageLines,current._group?.prompt,...(current._group?.passageLines || [])].filter(Boolean).join("\n");
+      if (/^\([1-9]\)/.test(line) && /[○◯×☓]|\bT\b[\s\S]*\bF\b|\bO\b[\s\S]*\bX\b|\btrue\b[\s\S]*\bfalse\b/i.test(questionContext)) {
+        current.passageLines.push(line);
+        continue;
+      }
+      if (/^\([1-9]\)/.test(line) && /빈칸|빈 곳|완성|채우|쓰세요|연결|(?:선|줄)을?\s*(?:긋|그어|이어)/.test(questionContext)) {
         current.passageLines.push(line);
         continue;
       }
@@ -775,6 +904,7 @@ function splitBlocksToQuestions(blocks) {
     const choices = Array.from({ length: Math.max(...keys) + 1 }, (_, i) => grp.choiceMap[i] || CIRCLED[i]);
     grp.members.forEach((q) => { q.type = "choice"; q.choices = [...choices]; q.images = [...grp.figureUrls]; });
   });
+  questions.forEach((q)=>prepareQuestion(q,true));
 
   let docTitle = "";
   for (const lt of leadingTexts) {
@@ -807,8 +937,7 @@ function xmlElements(node, name) {
 }
 
 function questionParseWarnings(questions) {
-  const nums = questions.filter((q) => q.type === "short" && /\(1\)/.test(q.passage) && /\(2\)/.test(q.passage)).map((q) => q.num);
-  return nums.length ? [`${nums.join(", ")}번은 여러 답칸을 주관식 한 칸으로 가져왔습니다. 답을 순서대로 쓰도록 질문과 정답을 확인해 주세요.`] : [];
+  return [];
 }
 
 function readHwpxXml(text) {
@@ -943,7 +1072,8 @@ function tableQuizVariants(docs, imgMap, blocks = []) {
     for (let j=ti+1; j<tables.length && !isWordTable(tables[j]); j++) {
       const parsed = splitBlocksToQuestions(hwpxSectionBlocks(tables[j], imgMap));
       if (parsed.detected_count) parsed.questions.filter((q)=>q.num>lastWord).forEach((q)=>{
-        q.passage = [writingInstruction, q.passage].filter(Boolean).join("\n");
+        q.prompt = [writingInstruction, questionContent(q)].filter(Boolean).join("\n\n");
+        q.passage = "";
         questions.push(q);
       });
     }
@@ -955,6 +1085,7 @@ function tableQuizVariants(docs, imgMap, blocks = []) {
   }
   const counts = new Map();
   variants.forEach((variant)=>{
+    variant.questions.forEach((q)=>prepareQuestion(q,true));
     const count = (counts.get(variant.title)||0)+1;
     counts.set(variant.title,count);
     variant.label = `${variant.title}${count>1 ? ` · 다른 문장 구성 ${count}` : ""} (${variant.questions.length}문항)`;
@@ -1815,6 +1946,7 @@ async function handleFiles(fileList) {
     }
 
     setLoadingProgress(100, "분석 완료!");
+    prepareParsedExam(parsed);
     const warnings = parsed.warnings || [];
     status.textContent = warnings.length
       ? `확인 필요: ${warnings.join(" ")}`
@@ -1908,6 +2040,7 @@ function openEditor(exam, variants = []) {
   document.getElementById("importVariantWrap").style.display = variants.length > 1 ? "flex" : "none";
   document.getElementById("importVariantSelect").innerHTML = variants.map((v,i)=>`<option value="${i}">${escapeHtml(v.label || v.title)}</option>`).join("");
   currentExam = JSON.parse(JSON.stringify(exam));
+  currentExam.questions.forEach((q)=>prepareQuestion(q,false));
   document.getElementById("edTitle").value = currentExam.title || "";
   document.getElementById("edMode").value = currentExam.mode || "cards";
   const scoreMode = currentExam.score_mode || (currentExam.show_score_to_student === false ? "none" : "full");
@@ -1956,25 +2089,79 @@ function selectImportVariant(value) {
   renderEditorQuestions();
 }
 
+function responseEditorHtml(q, idx) {
+  const values = responseValues(q);
+  const rows = q.response_items.map((item, ri)=>{
+    const options = q.type === "ox" ? q.choices.map((c)=>[c,c === "O" ? "○ (O)" : c === "X" ? "× (X)" : c])
+      : q.type === "matching" ? q.choices.map((c,i)=>[String(i+1),`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`])
+      : (item.choices || []).map((c)=>[c,c]);
+    const answer = options.length ? `<select onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:120px;"><option value="">정답 선택</option>${options.map(([v,t])=>`<option value="${escapeHtml(v)}" ${values[ri]===v?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>`
+      : `<input value="${escapeHtml(values[ri] || "")}" placeholder="이 칸의 정답 (다른 표현은 |로 구분)" onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:180px;" />`;
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center;"><input value="${escapeHtml(item.label)}" aria-label="답칸 이름" onchange="currentExam.questions[${idx}].response_items[${ri}].label=this.value" style="width:105px;" />${answer}${q.type === "blanks" ? `<input value="${escapeHtml((item.choices || []).join(" | "))}" placeholder="선택지 (|로 구분, 비우면 직접 입력)" onchange="setBlankOptions(${idx},${ri},this.value)" style="flex:1;min-width:200px;" />` : ""}</div>`;
+  }).join("");
+  return `<div style="padding:12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin:10px 0;"><strong>답칸과 정답</strong>
+    ${q.type === "ox" ? `<select aria-label="판단 기호" onchange="setJudgmentMode(${idx},this.value)" style="margin-left:8px;"><option value="ox" ${q.choices[0]!=="T"?"selected":""}>○ / ×</option><option value="tf" ${q.choices[0]==="T"?"selected":""}>T / F</option></select>` : ""}
+    ${rows}<button type="button" class="btn btn-light btn-sm" onclick="addResponseItem(${idx})">+ 답칸 추가</button> <button type="button" class="btn btn-light btn-sm" onclick="removeResponseItem(${idx})">- 마지막 답칸 삭제</button>
+    ${q.response_items.length>1 ? `<label style="display:block;font-size:0.82rem;margin-top:8px;"><input type="checkbox" ${q.partial_credit?"checked":""} onchange="currentExam.questions[${idx}].partial_credit=this.checked" /> 답칸별 부분 점수 (문항 배점을 답칸 수로 나누어 채점)</label>` : ""}</div>`;
+}
+
+function setResponseAnswer(idx, row, value) {
+  const q = currentExam.questions[idx], values = responseValues(q);
+  values[row] = value;
+  q.answer = JSON.stringify(q.response_items.map((_,i)=>values[i] || ""));
+}
+function setBlankOptions(idx, row, text) {
+  const q=currentExam.questions[idx];
+  q.response_items[row].choices=text.split("|").map((s)=>s.trim()).filter(Boolean);
+  setResponseAnswer(idx,row,"");
+  renderEditorQuestions();
+}
+function updateChoiceText(idx, ci, text) {
+  currentExam.questions[idx].choices[ci]=text;
+  if (currentExam.questions[idx].type === "matching") renderEditorQuestions();
+}
+function setJudgmentMode(idx, mode) {
+  const q=currentExam.questions[idx], values=responseValues(q);
+  q.choices=mode === "tf" ? ["T","F"] : ["O","X"];
+  q.answer=JSON.stringify(values.map((v)=>{
+    const key=judgmentValue(v);
+    return key ? q.choices[key==="O" ? 0 : 1] : "";
+  }));
+  renderEditorQuestions();
+}
+function addResponseItem(idx) {
+  const q=currentExam.questions[idx];
+  if(q.response_items.length>=30)return alert("답칸은 최대 30개까지 추가할 수 있습니다.");
+  q.response_items.push({label:`(${q.response_items.length+1})`});
+  prepareQuestion(q,false); renderEditorQuestions();
+}
+function removeResponseItem(idx) {
+  const q=currentExam.questions[idx];
+  if(q.response_items.length<=1)return;
+  q.response_items.pop(); prepareQuestion(q,false); renderEditorQuestions();
+}
+
 function renderEditorQuestions() {
   const list = document.getElementById("questionsEditorList");
   list.innerHTML = "";
   currentExam.questions.forEach((q, idx) => {
     const card = document.createElement("div");
     card.className = "q-edit-card";
-    const isChoice = q.type !== "short";
+    prepareQuestion(q,false);
+    const isChoice = q.type === "choice";
+    const structured = isStructuredQuestion(q);
     const ansSet = new Set(String(q.answer || "").split(",").map((s) => s.trim()).filter(Boolean));
     const choiceBtns = isChoice
-      ? q.choices.map((_, ci) => `<button type="button" class="ans-pill ${ansSet.has(String(ci + 1)) ? "active" : ""}" onclick="setQAnswer(${idx}, '${ci + 1}')">${CIRCLED[ci]}</button>`).join("")
-      : `<input type="text" value="${escapeHtml(q.answer || "")}" placeholder="정답 (유사 답안은 | 로 구분)" onchange="setQAnswer(${idx}, this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;min-width:210px;" />`;
+      ? q.choices.map((_, ci) => `<button type="button" class="ans-pill ${ansSet.has(String(ci + 1)) ? "active" : ""}" onclick="setQAnswer(${idx}, '${ci + 1}')">${CIRCLED[ci] || ci+1}</button>`).join("")
+      : structured ? `<span style="font-size:0.82rem;">아래 답칸별로 설정</span>` : `<input type="text" value="${escapeHtml(q.answer || "")}" placeholder="정답 (유사 답안은 | 로 구분)" onchange="setQAnswer(${idx}, this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;min-width:210px;" />`;
     const multiToggle = isChoice
       ? `<label style="font-size:0.8rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
            <input type="checkbox" ${q.multi ? "checked" : ""} onchange="currentExam.questions[${idx}].multi=this.checked;renderEditorQuestions()" /> 복수정답
          </label>`
       : "";
-    const choicesHtml = isChoice
+    const choicesHtml = (isChoice || q.type === "matching")
       ? `<div class="choices-edit-grid">
-          ${q.choices.map((c, ci) => `<div style="display:flex;gap:4px;align-items:center;"><span style="font-weight:700;color:var(--muted);">${CIRCLED[ci]}</span><input type="text" value="${escapeHtml(c)}" onchange="currentExam.questions[${idx}].choices[${ci}]=this.value" style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:6px;" /></div>`).join("")}
+          ${q.choices.map((c, ci) => `<div style="display:flex;gap:4px;align-items:center;"><span style="font-weight:700;color:var(--muted);">${CIRCLED[ci] || ci+1}</span><input type="text" value="${escapeHtml(c)}" onchange="updateChoiceText(${idx},${ci},this.value)" style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:6px;" /></div>`).join("")}
         </div>
         <div style="margin-top:6px;display:flex;gap:6px;">
           <button type="button" class="btn btn-light btn-sm" onclick="addChoice(${idx})">+ 보기 추가</button>
@@ -2001,8 +2188,7 @@ function renderEditorQuestions() {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <strong style="color:var(--navy);font-size:1rem;">${q.num}번</strong>
           <select onchange="changeQType(${idx}, this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:7px;">
-            <option value="choice" ${isChoice ? "selected" : ""}>객관식</option>
-            <option value="short" ${!isChoice ? "selected" : ""}>단답형</option>
+            ${[["choice","객관식"],["short","단답·문장형"],["ox","OX / T·F"],["matching","연결·짝짓기"],["blanks","여러 빈칸·소문항"]].map(([value,label])=>`<option value="${value}" ${q.type===value?"selected":""}>${label}</option>`).join("")}
           </select>
           <label style="font-size:0.82rem;color:var(--muted);">배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=parseFloat(this.value)||1" style="width:58px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;" /></label>
           ${multiToggle}
@@ -2013,11 +2199,11 @@ function renderEditorQuestions() {
           <button type="button" class="btn btn-red btn-sm" onclick="deleteQuestion(${idx})">삭제</button>
         </div>
       </div>
-      <div class="field"><input type="text" value="${escapeHtml(q.prompt || "")}" placeholder="문제 질문" onchange="currentExam.questions[${idx}].prompt=this.value" /></div>
-      <div class="field"><textarea rows="2" placeholder="지문/보기 박스 (선택)" onchange="currentExam.questions[${idx}].passage=this.value">${escapeHtml(q.passage || "")}</textarea></div>
+      <div class="field"><label>문제 내용 (질문·지문·보기 설명)</label><textarea rows="6" placeholder="질문, 지문, 보기 설명을 순서대로 적으세요." onchange="currentExam.questions[${idx}].prompt=this.value">${escapeHtml(q.prompt || "")}</textarea></div>
       ${imgsHtml}
       ${imgToolsHtml}
       ${choicesHtml}
+      ${structured ? responseEditorHtml(q,idx) : ""}
       <div class="field" style="margin-top:8px;margin-bottom:0;"><input type="text" value="${escapeHtml(q.explain || "")}" placeholder="해설 (선택)" onchange="currentExam.questions[${idx}].explain=this.value" style="font-size:0.85rem;" /></div>
     `;
     card.addEventListener("paste", (e) => {
@@ -2046,17 +2232,28 @@ function setQAnswer(idx, val) {
 function changeQType(idx, newType) {
   const q = currentExam.questions[idx];
   q.type = newType;
+  q.answer = "";
+  q.multi = false;
+  if (isStructuredQuestion(q)) {
+    const labels=subpartLabels(questionContent(q));
+    q.response_items=(labels.length?labels:["답"]).map((label)=>({label}));
+    if(newType === "ox")q.choices=["O","X"];
+    if(newType === "matching" && q.choices.length<2)q.choices=["보기 1","보기 2","보기 3"];
+  } else {
+    delete q.response_items; delete q.partial_credit;
+  }
   if (newType === "choice" && (!q.choices || !q.choices.length)) {
     q.choices = ["①", "②", "③", "④", "⑤"];
-    q.answer = "1";
+    q.answer = "";
   } else if (newType === "short") {
     q.answer = "";
   }
+  prepareQuestion(q,false);
   renderEditorQuestions();
 }
 function addChoice(idx) {
   const q = currentExam.questions[idx];
-  if (q.choices.length >= 5) return alert("최대 5지선다까지 지원합니다.");
+  if (q.choices.length >= 30) return alert("보기는 최대 30개까지 추가할 수 있습니다.");
   q.choices.push(`보기 ${q.choices.length + 1}`);
   renderEditorQuestions();
 }
@@ -2064,6 +2261,8 @@ function removeChoice(idx) {
   const q = currentExam.questions[idx];
   if (q.choices.length <= 2) return alert("최소 2개 보기가 필요합니다.");
   q.choices.pop();
+  if(q.type==="matching")q.answer=JSON.stringify(responseValues(q).map((v)=>Number(v)>q.choices.length?"":v));
+  else q.answer=String(q.answer || "").split(",").filter((v)=>Number(v)<=q.choices.length).join(",");
   renderEditorQuestions();
 }
 function removeImage(qIdx, imgIdx) {
@@ -2268,9 +2467,13 @@ document.getElementById("addQuestionBtn").addEventListener("click", () => {
   renderEditorQuestions();
 });
 document.getElementById("applyFastAnswersBtn").addEventListener("click", () => {
-  const parts = document.getElementById("fastAnswersInput").value.trim().split(/[,\s]+/).filter(Boolean);
-  parts.forEach((ans, i) => { if (i < currentExam.questions.length) currentExam.questions[i].answer = ans; });
-  renderEditorQuestions();
+  const text=document.getElementById("fastAnswersInput").value.trim();
+  const parts=text.split(text.includes(";") ? /;/ : text.includes(",") ? /,/ : text.includes("\n") ? /\n/ : /\s+/).map((s)=>s.trim()).filter(Boolean);
+  try {
+    const values=parts.slice(0,currentExam.questions.length).map((ans,i)=>bulkAnswerValue(currentExam.questions[i],ans));
+    values.forEach((ans,i)=>{currentExam.questions[i].answer=ans;});
+    renderEditorQuestions();
+  } catch(error) {alert(error.message);}
 });
 document.getElementById("closeEditorBtn").addEventListener("click", () => {
   document.getElementById("editorSection").classList.remove("show");
@@ -2366,6 +2569,14 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   showLoadingProgress("☁️ 저장하고 QR 발급 중...", "구글 시트에 시험지를 저장하고 있습니다...", 15);
   creepLoadingProgress(85, "구글 시트에 시험지를 저장하고 있습니다");
   try {
+    currentExam.questions.forEach((q)=>prepareQuestion(q,false));
+    if(currentExam.questions.some(isStructuredQuestion)) {
+      const capabilities=await apiCall({action:"capabilities"});
+      if(!capabilities.ok || Number(capabilities.question_schema || 0)<2) {
+        alert("OX·연결·여러 빈칸 답안을 저장하려면 수정된 Code.gs를 Apps Script에 붙여넣고 기존 배포를 새 버전으로 업데이트해 주세요.");
+        return;
+      }
+    }
     const examToSave = currentExam.mode === "cards" ? { ...currentExam, page_images: [] } : currentExam;
     const data = await apiCall({ action: "save_exam", exam: examToSave });
     if (!data.ok) {
@@ -2427,7 +2638,7 @@ async function deleteExam(examId) {
 function showQrForExam(examId, title, entryPin = "") {
   const baseViewer = getViewerUrl();
   const sep = baseViewer.includes("?") ? "&" : "?";
-  const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}`;
+  const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}&v=2`;
   document.getElementById("qrExamTitle").textContent = title;
   const pinBanner = document.getElementById("qrPinBanner");
   if (pinBanner) {
@@ -2496,10 +2707,15 @@ function renderPreviewModal(examObj) {
     html += `<div class="pv-card">${target.page_images.map((u) => `<img src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
   }
   target.questions.forEach((q) => {
-    html += `<div class="pv-card"><div style="font-weight:700;white-space:pre-line;"><span style="color:var(--navy);margin-right:6px;">${q.num}.</span>${escapeHtml(q.prompt || "")}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
-    if (q.passage) html += `<div class="pv-passage">${escapeHtml(q.passage)}</div>`;
-    if (q.images && q.images.length) html += `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">${q.images.map((u) => `<img src="${u}" style="max-width:100%;max-height:190px;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
-    if (q.type === "short") html += `<div style="margin-top:8px;border:1.5px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--muted);font-size:0.9rem;">단답형 답안 입력란</div>`;
+    html += `<div class="pv-card"><div style="white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${q.num}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
+    if (q.images && q.images.length) html += `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">${q.images.map((u) => `<img src="${u}" style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
+    if (isStructuredQuestion(q)) html += (q.response_items || []).map((item)=>{
+      const options=q.type==="ox"?q.choices:q.type==="matching"?q.choices.map((c,i)=>`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`):(item.choices || []);
+      const input=q.type==="ox" ? `<div style="display:flex;gap:8px;">${options.map((c)=>`<button type="button" disabled style="padding:9px 16px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--navy);">${escapeHtml(c==="O"?"○ (O)":c==="X"?"× (X)":c)}</button>`).join("")}</div>`
+        : options.length ? `<select disabled><option>선택하세요</option>${options.map((c)=>`<option>${escapeHtml(c)}</option>`).join("")}</select>` : `<input disabled placeholder="답 입력" />`;
+      return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;"><strong>${escapeHtml(item.label)}</strong>${input}</div>`;
+    }).join("");
+    else if (q.type === "short") html += `<div style="margin-top:8px;border:1.5px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--muted);font-size:0.9rem;">단답형 답안 입력란</div>`;
     else if (mode !== "omr_pages") html += q.choices.map((c, ci) => `<div class="pv-choice"><b>${CIRCLED[ci] || (ci + 1)}</b> ${escapeHtml(c)}</div>`).join("");
     html += `</div>`;
   });
