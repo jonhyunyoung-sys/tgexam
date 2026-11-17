@@ -124,6 +124,13 @@
   .img-thumbs img { height: 76px; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
   .page-preview-strip { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; margin-bottom: 12px; }
   .page-preview-strip img { height: 150px; border: 1px solid var(--border); border-radius: 8px; }
+  .review-summary { padding:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;margin:12px 0;line-height:1.7; }
+  .answer-row { display:grid;grid-template-columns:42px minmax(140px,1fr) minmax(240px,2fr) auto;gap:12px;align-items:center;border-bottom:1px solid var(--border);padding:12px 4px; }
+  .answer-row input,.answer-row select { padding:8px;border:1px solid var(--border);border-radius:7px;max-width:100%; }
+  .answer-row .answer-controls { display:flex;gap:8px;flex-wrap:wrap;align-items:center; }
+  .answer-ready { color:var(--green);font-size:0.78rem; }
+  .answer-missing { color:#b45309;font-size:0.78rem; }
+  @media(max-width:700px) { .answer-row {grid-template-columns:32px 1fr auto;} .answer-row .answer-controls {grid-column:2 / -1;grid-row:2;} }
 
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.72); z-index: 100; align-items: center; justify-content: center; padding: 18px; }
   .modal-backdrop.show { display: flex; }
@@ -296,10 +303,21 @@
 
     <div class="fast-answer-bar">
       <strong style="font-size:0.88rem;color:var(--navy);">⚡ 빠른 정답 일괄 입력:</strong>
-      <input id="fastAnswersInput" type="text" placeholder="문항은 쉼표로 구분 · 예: 2, O/X, 1/3, 정답" />
+      <textarea id="fastAnswersInput" rows="2" style="flex:1;min-width:220px;" placeholder="정답을 한꺼번에 붙여넣으세요. 예: 2, O/X, 1/3 또는 번호가 있는 정답지 1. ② 2. ③"></textarea>
       <button type="button" class="btn btn-blue btn-sm" id="applyFastAnswersBtn">1번부터 적용</button>
       <button type="button" class="btn btn-light btn-sm" id="addQuestionBtn">+ 문항 추가</button>
     </div>
+
+    <div id="reviewSummary" class="review-summary" role="status"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">
+      <button type="button" class="btn btn-blue btn-sm" id="answersViewBtn" onclick="setEditorView('answers')">정답표</button>
+      <button type="button" class="btn btn-light btn-sm" id="reviewViewBtn" onclick="setEditorView('review')">내용 확인 필요</button>
+      <button type="button" class="btn btn-light btn-sm" id="allViewBtn" onclick="setEditorView('all')">전체 문항 편집</button>
+      <button type="button" class="btn btn-light btn-sm" id="answerKeyPreviewBtn" style="display:none;" onclick="showAnswerKeyPreview()">정답지 원본 확인</button>
+      <label style="font-size:0.84rem;align-self:center;"><input type="checkbox" id="showCompletedAnswers" onchange="renderEditorQuestions()" /> 완료한 정답도 보기</label>
+    </div>
+    <details id="importNotes" style="display:none;margin:8px 0;color:var(--muted);"></details>
+    <div id="editorNotice" role="alert" style="display:none;padding:10px;color:#92400e;background:#fffbeb;border-radius:8px;margin:8px 0;"></div>
 
     <div id="questionsEditorList"></div>
   </section>
@@ -695,7 +713,7 @@ function prepareParsedExam(parsed) {
 
 function bulkAnswerValue(q, text) {
   if(!isStructuredQuestion(q))return text;
-  const values=text.split("/").map((s)=>s.trim());
+  const values=(Array.isArray(text)?text:String(text).split("/")).map((s)=>String(s).trim());
   if(values.length!==q.response_items.length)throw new Error(`${q.num}번은 답칸 ${q.response_items.length}개의 정답을 /로 구분해 주세요.`);
   return JSON.stringify(values.map((value)=>{
     if(q.type==="ox") {
@@ -706,6 +724,79 @@ function bulkAnswerValue(q, text) {
     if(q.type==="matching" && (!/^\d+$/.test(value) || Number(value)<1 || Number(value)>q.choices.length))throw new Error(`${q.num}번 연결 보기 번호를 확인해 주세요.`);
     return value;
   }));
+}
+
+function answerIsComplete(q) {
+  if(isStructuredQuestion(q)) {
+    const values=responseValues(q);
+    return Boolean(q.response_items?.length) && values.length===q.response_items.length && values.every((value,i)=>{
+      if(!value.trim())return false;
+      if(q.type==="ox")return Boolean(judgmentValue(value));
+      if(q.type==="matching")return /^\d+$/.test(value) && Number(value)>=1 && Number(value)<=q.choices.length;
+      const options=q.response_items[i].choices || [];
+      return !options.length || value.split("|").some((v)=>options.some((option)=>option.normalize("NFKC").toLowerCase()===v.normalize("NFKC").trim().toLowerCase()));
+    });
+  }
+  const value=String(q.answer ?? "").trim();
+  if(q.type!=="choice")return Boolean(value);
+  const parts=value.split(",").map((v)=>v.trim());
+  return Boolean(value) && (!q.multi || new Set(parts).size===parts.length) && parts.every((v)=>/^\d+$/.test(v) && Number(v)>=1 && Number(v)<=q.choices.length);
+}
+
+function questionReviewReasons(q) {
+  const reasons=[];
+  const text=questionContent(q);
+  if(!q.images?.length && (!text || /^(?:\d+번\s*(?:문항|문제)\s*$|문항 내용을 확인|원본을 보고 문항)/.test(text)))reasons.push("문제 내용 확인");
+  if(q.type==="choice" && q.choices.length<2)reasons.push("보기 확인");
+  if(isStructuredQuestion(q) && !q.response_items?.length)reasons.push("답칸 확인");
+  if(/[\uE000-\uF8FF]/.test(text))reasons.push("추출되지 않은 글자 확인");
+  return reasons;
+}
+
+function examReadiness(exam) {
+  const qs=exam?.questions || [];
+  return {total:qs.length, answered:qs.filter(answerIsComplete).length,
+    missing:qs.filter((q)=>!answerIsComplete(q)).map((q)=>q.num),
+    review:qs.filter((q)=>questionReviewReasons(q).length).map((q)=>q.num),
+    imported:qs.filter((q)=>q.answer_source && answerIsComplete(q)).length};
+}
+
+function numberedAnswerEntries(text) {
+  const source=cleanText(text).replace(/[❶❷❸❹❺]/g,(c)=>CIRCLED["❶❷❸❹❺".indexOf(c)]);
+  const markers=[...source.matchAll(/(?:^|\n|[ \t])(?:문제\s*)?(\d{1,3})\s*(?:번\s*[:.)]?|[.):：](?=\D|$))\s*/g)];
+  if(markers.length<2)return null;
+  const entries=new Map();
+  markers.forEach((m,i)=>{
+    const num=Number(m[1]), answer=source.slice(m.index+m[0].length,markers[i+1]?.index ?? source.length).trim();
+    if(entries.has(num))throw new Error(`${num}번 정답이 두 번 있습니다. 시험지 구성을 하나씩 나누어 붙여넣어 주세요.`);
+    if(!answer)throw new Error(`${num}번 정답을 읽지 못했습니다.`);
+    entries.set(num,answer);
+  });
+  return entries;
+}
+
+function answerFromText(q, text) {
+  let value=String(text).trim().replace(/^(?:정답|답)\s*[:：]\s*/,"");
+  if(q.type==="choice") {
+    value=value.replace(/[①-⑳]/g,(c)=>String(c.charCodeAt(0)-0x2460+1)+(q.multi?",":""));
+    if(q.multi)value=value.split(/[,/\s]+/).filter(Boolean).join(",");
+    if(!answerIsComplete({...q,answer:value}))throw new Error(`${q.num}번 보기 번호를 확인해 주세요.`);
+    return value;
+  }
+  return isStructuredQuestion(q)?bulkAnswerValue(q,responseValues(q,value.replace(/^[（(]([\s\S]*)[）)]$/,"$1")).map((v)=>q.type==="matching"?v.normalize("NFKC"):v)):value;
+}
+
+function planAnswerUpdates(questions,text) {
+  const numbered=numberedAnswerEntries(text);
+  if(numbered)return [...numbered].map(([num,value])=>{
+    const index=questions.findIndex((q)=>q.num===num);
+    if(index<0)throw new Error(`${num}번은 현재 시험지에 없습니다. 정답지 구성을 확인해 주세요.`);
+    return {index,value:answerFromText(questions[index],value)};
+  });
+  const values=text.trim().split(text.includes(";")?/;/:text.includes(",")?/,/:text.includes("\n")?/\n/:/\s+/).map((s)=>s.trim()).filter(Boolean);
+  if(!values.length)throw new Error("정답을 붙여넣어 주세요.");
+  if(values.length>questions.length)throw new Error("정답 개수가 시험지 문항 수보다 많습니다. 번호가 있는 정답지는 ‘1. 정답’ 형식으로 붙여넣어 주세요.");
+  return values.map((value,index)=>({index,value:answerFromText(questions[index],value)}));
 }
 
 function splitBlocksToQuestions(blocks) {
@@ -1297,24 +1388,86 @@ async function cropCanvasRegion(canvas, rect) {
   return info.url;
 }
 
+function worksheetAnswerKey(pages, plan) {
+  const keys=new Map();
+  const ambiguous=new Set();
+  for(const page of pages.filter((p)=>plan.excludedPages.includes(p.number))) {
+    const headings=page.items.map((it)=>({...it,section:/^\s*(VIII|VII|VI|IV|III|II|IX|V|X|I)(?:[.]|\s|$)/.exec(it.str)?.[1]}))
+      .filter((it)=>it.section && it.x0<page.width*.16 && it.y0>page.height*.04).sort((a,b)=>a.y0-b.y0);
+    for(let si=0;si<headings.length;si++) {
+      const heading=headings[si], end=headings[si+1]?.y0 ?? page.height*.94;
+      const target=plan.sections.find((sec)=>sec.section===heading.section);
+      if(!target)continue;
+      const anchors=page.items.map((it)=>({...it,num:Number(/^\s*(\d{1,3})\.\s*/.exec(it.str)?.[1] || 0)}))
+        .filter((it)=>it.num && it.y0>heading.y1 && it.y0<end).sort((a,b)=>a.y0-b.y0 || a.x0-b.x0);
+      if(anchors.length!==target.tasks.length || new Set(anchors.map((a)=>a.num)).size!==anchors.length)continue;
+      if(anchors.map((a)=>a.num).sort((a,b)=>a-b).some((n,i)=>n!==i+1))continue;
+      const columns=[];
+      [...anchors].sort((a,b)=>a.x0-b.x0).forEach((a)=>{if(!columns.some((x)=>Math.abs(x-a.x0)<page.width*.025))columns.push(a.x0);});
+      for(const anchor of anchors) {
+        const ci=columns.findIndex((x)=>Math.abs(x-anchor.x0)<page.width*.025);
+        const x1=columns[ci+1] ?? page.width*.97;
+        const baseline=anchor.yBase ?? anchor.y0;
+        const next=anchors.filter((a)=>Math.abs(a.x0-anchor.x0)<page.width*.025 && a.y0>anchor.y0+anchor.h).sort((a,b)=>a.y0-b.y0)[0];
+        const items=page.items.filter((it)=>it.x0>=anchor.x0-2 && it.x0<x1-2 && (it.yBase ?? it.y0)>=baseline-2 && it.y0<(next?.y0 ?? end));
+        const rows=[];
+        items.sort((a,b)=>(a.yBase ?? a.y0)-(b.yBase ?? b.y0) || a.x0-b.x0).forEach((it)=>{
+          const y=it.yBase ?? it.y0;
+          let row=rows.find((r)=>Math.abs(r.y-y)<3);
+          if(!row){row={y,items:[]};rows.push(row);}row.items.push(it);
+        });
+        const selected=[];let last=baseline;
+        for(const row of rows) {
+          if(row.y-last>anchor.h*1.9)break;
+          selected.push(row.items.sort((a,b)=>a.x0-b.x0).map((it)=>it.str).join(" "));last=row.y;
+        }
+        const answer=cleanText(selected.join(" ")).replace(/^\d+\.\s*/,"").replace(/\s*\([^)]*\)/g,"").trim();
+        // In this format an English answer is recoverable even when Korean
+        // glosses in parentheses have no usable PDF character mapping.
+        if(answer && /[A-Za-z]/.test(answer) && !/[\uE000-\uF8FF]|※/.test(answer) && !/^\d+\./.test(answer)) {
+          const key=`${heading.section}:${anchor.num}`;
+          if(ambiguous.has(key))continue;
+          if(!keys.has(key))keys.set(key,{answer,page:page.number});
+          else if(!keys.get(key).answer.split("|").includes(answer)){keys.delete(key);ambiguous.add(key);}
+        }
+      }
+    }
+    const noteText=cleanText([...page.items].sort((a,b)=>(a.yBase ?? a.y0)-(b.yBase ?? b.y0) || a.x0-b.x0).map((it)=>it.str).join(" "));
+    for(const match of noteText.matchAll(/[:：]\s*(VIII|VII|VI|IV|III|II|IX|V|X|I)\b[^()]{0,100}\(\s*[:：]?\s*([^()]*\/[^()]*)\)/g)) {
+      const sec=plan.sections.find((s)=>s.section===match[1]);
+      const alternatives=match[2].split("/").map((s)=>s.trim());
+      if(!sec || alternatives.length!==sec.tasks.length || !alternatives.every((s)=>/[A-Za-z]/.test(s)))continue;
+      alternatives.forEach((alternative,i)=>{
+        const key=keys.get(`${sec.section}:${i+1}`);
+        if(key && !key.answer.split("|").includes(alternative))key.answer+=`|${alternative}`;
+      });
+    }
+  }
+  return keys;
+}
+
 async function parseSectionWorksheet(pages, pageImages, name, forcePageMode) {
   const plan = sectionWorksheetPlan(pages);
   if (!plan) return null;
+  const answerKey=worksheetAnswerKey(pages,plan);
   const questions = [];
   for (const sec of plan.sections) {
     const canvas = pages.find((p) => p.number === sec.page).canvas;
     const headerImage = await cropCanvasRegion(canvas, sec.header);
     for (const task of sec.tasks) {
       const questionImage = await cropCanvasRegion(canvas, task.rect);
+      const key=answerKey.get(`${sec.section}:${task.localNum}`);
       questions.push({ num: questions.length + 1, type: "short", multi: false,
         prompt: `${sec.section}-${task.localNum}. 원본 문항을 보고 답하세요.`, passage: "",
-        images: [headerImage, questionImage], choices: [], answer: "", points: sec.points, explain: "" });
+        images: [headerImage, questionImage], choices: [], answer: key?.answer || "", points: sec.points, explain: "",
+        ...(key?{answer_source:{kind:"appendix",page:key.page,section:sec.section,number:task.localNum}}:{}) });
     }
   }
   return { mode: forcePageMode ? "omr_pages" : "cards", questions, detected_count: questions.length,
     page_images: plan.usedPages.map((n) => pageImages[n - 1]), suggested_title: name.replace(/\.[^.]+$/, ""), header_logo: "",
     excluded_pages: plan.excludedPages,
-    warnings: ["구역마다 반복되는 번호를 구분하고 원본 문항을 그림으로 보존했습니다. 질문에 표시된 구역·번호에 맞게 정답과 배점을 입력해 주세요.",
+    answer_key_pages:plan.excludedPages.map((n)=>pageImages[n-1]),
+    warnings: [`구역마다 반복되는 번호를 구분하고 원본 문항을 그림으로 보존했습니다. 정답지에서 ${questions.filter((q)=>q.answer_source).length}개 정답을 가져왔습니다. 정답표와 원본 정답지를 확인해 주세요.`,
       ...(plan.excludedPages.length ? [`앞 구역이 반복되는 ${plan.excludedPages.join(", ")}쪽은 정답·해설 부록으로 판단해 제외했습니다. 배포 전 페이지 미리보기를 확인해 주세요.`] : [])] };
 }
 
@@ -1958,10 +2111,11 @@ async function handleFiles(fileList) {
       header_logo: parsed.header_logo || "",
       page_images: parsed.page_images || [],
       questions: parsed.questions,
+      import_notes: warnings,
+      answer_key_pages: parsed.answer_key_pages || [],
       show_score_to_student: true,
       is_open: true,
     }, parsed.variants || []);
-    if (warnings.length) alert(warnings.join("\n"));
   } catch (err) {
     status.textContent = "";
     alert("파일 분석 중 오류가 발생했습니다: " + err.message);
@@ -1982,6 +2136,8 @@ fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileI
 let currentExam = null;
 let importedVariantDrafts = [];
 let selectedImportVariant = 0;
+let editorView = "answers";
+let focusedQuestionNum = null;
 
 async function loadExams() {
   const list = document.getElementById("examList");
@@ -2035,12 +2191,19 @@ function syncPinInputUi() {
 document.getElementById("edUsePin").addEventListener("change", syncPinInputUi);
 
 function openEditor(exam, variants = []) {
+  editorView="answers";focusedQuestionNum=null;
+  document.getElementById("showCompletedAnswers").checked=false;
   importedVariantDrafts = JSON.parse(JSON.stringify(variants));
   selectedImportVariant = 0;
   document.getElementById("importVariantWrap").style.display = variants.length > 1 ? "flex" : "none";
   document.getElementById("importVariantSelect").innerHTML = variants.map((v,i)=>`<option value="${i}">${escapeHtml(v.label || v.title)}</option>`).join("");
   currentExam = JSON.parse(JSON.stringify(exam));
   currentExam.questions.forEach((q)=>prepareQuestion(q,false));
+  document.getElementById("editorNotice").style.display="none";
+  const notes=document.getElementById("importNotes");
+  notes.style.display=currentExam.import_notes?.length?"block":"none";
+  notes.innerHTML=`<summary>가져오기 안내</summary>${(currentExam.import_notes || []).map((note)=>`<div>${escapeHtml(note)}</div>`).join("")}`;
+  document.getElementById("answerKeyPreviewBtn").style.display=currentExam.answer_key_pages?.length?"inline-flex":"none";
   document.getElementById("edTitle").value = currentExam.title || "";
   document.getElementById("edMode").value = currentExam.mode || "cards";
   const scoreMode = currentExam.score_mode || (currentExam.show_score_to_student === false ? "none" : "full");
@@ -2089,6 +2252,77 @@ function selectImportVariant(value) {
   renderEditorQuestions();
 }
 
+function updateReviewSummary() {
+  if(!currentExam)return;
+  const state=examReadiness(currentExam), el=document.getElementById("reviewSummary");
+  if(!el)return;
+  el.innerHTML=`<strong>${state.total}문항 준비됨 · 정답 ${state.answered}/${state.total} 완료</strong>${state.imported?` · 정답지에서 ${state.imported}개 자동 입력`:""}<div style="font-size:0.86rem;">${state.missing.length?`정답 ${state.missing.length}개만 입력하면 됩니다.`:"정답 입력이 완료되었습니다. 미리보기 후 QR을 발급하세요."}${state.review.length?` 내용 확인이 필요한 문항 ${state.review.length}개가 있습니다.`:""}</div>`;
+  document.getElementById("reviewViewBtn").textContent=`내용 확인 필요 (${state.review.length})`;
+  for(const [id,mode] of [["answersViewBtn","answers"],["reviewViewBtn","review"],["allViewBtn","all"]]) {
+    const button=document.getElementById(id);
+    button.classList.toggle("btn-blue",editorView===mode);button.classList.toggle("btn-light",editorView!==mode);
+  }
+}
+function setEditorView(view) {editorView=view;focusedQuestionNum=null;renderEditorQuestions();}
+function focusQuestion(idx) {
+  editorView="all";focusedQuestionNum=currentExam.questions[idx].num;
+  renderEditorQuestions();document.getElementById("questionsEditorList").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function editorNotice(text) {
+  const el=document.getElementById("editorNotice");el.textContent=text;el.style.display=text?"block":"none";
+}
+function markCompactAnswer(idx) {
+  updateReviewSummary();
+  const q=currentExam.questions[idx], el=document.getElementById(`answer-status-${idx}`);
+  if(el){el.className=answerIsComplete(q)?"answer-ready":"answer-missing";el.textContent=answerIsComplete(q)?(q.answer_source?"정답지에서 입력":"입력 완료"):"미입력";}
+}
+function setCompactAnswer(idx,text) {
+  const q=currentExam.questions[idx];
+  try {q.answer=answerFromText(q,text);delete q.answer_source;editorNotice("");}
+  catch(error){q.answer="";delete q.answer_source;editorNotice(error.message);}
+  markCompactAnswer(idx);
+}
+function setCompactResponse(idx,row,value) {
+  setResponseAnswer(idx,row,value);delete currentExam.questions[idx].answer_source;
+  markCompactAnswer(idx);
+  const q=currentExam.questions[idx];
+  if(q.type==="ox")q.choices.forEach((c,oi)=>document.getElementById(`compact-${idx}-${row}-${oi}`)?.classList.toggle("active",value===c));
+}
+function compactAnswerInputs(q,idx) {
+  const select=(options,value,event)=>`<select onchange="${event}" style="flex:1;min-width:160px;"><option value="">정답 선택</option>${options.map(([v,label])=>`<option value="${escapeHtml(v)}" ${value===v?"selected":""}>${escapeHtml(label)}</option>`).join("")}</select>`;
+  if(q.type==="choice" && !q.multi)return select(q.choices.map((c,i)=>[String(i+1),`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`]),String(q.answer || ""),`setCompactAnswer(${idx},this.value)`);
+  if(!isStructuredQuestion(q))return `<input style="flex:1;min-width:190px;" value="${escapeHtml(q.answer || "")}" placeholder="${q.multi?"선택할 번호: 1,3":"정답 입력"}" onchange="setCompactAnswer(${idx},this.value)" />`;
+  const values=responseValues(q);
+  return q.response_items.map((item,ri)=>{
+    let input;
+    if(q.type==="ox")input=q.choices.map((c,oi)=>`<button type="button" id="compact-${idx}-${ri}-${oi}" class="ans-pill ${values[ri]===c?"active":""}" onclick="setCompactResponse(${idx},${ri},'${c}')">${c==="O"?"○":c==="X"?"×":c}</button>`).join("");
+    else {
+      const options=q.type==="matching"?q.choices.map((c,i)=>[String(i+1),`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`]):(item.choices || []).map((c)=>[c,c]);
+      input=options.length?select(options,values[ri] || "",`setCompactResponse(${idx},${ri},this.value)`):`<input style="min-width:120px;flex:1;" value="${escapeHtml(values[ri] || "")}" placeholder="정답" onchange="setCompactResponse(${idx},${ri},this.value)" />`;
+    }
+    return `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;"><span style="font-size:0.82rem;">${escapeHtml(item.label)}</span>${input}</div>`;
+  }).join("");
+}
+function renderCompactAnswerTable(list) {
+  const all=document.getElementById("showCompletedAnswers").checked;
+  const types={choice:"객관식",short:"단답·문장",ox:"OX / T·F",matching:"연결",blanks:"빈칸"};
+  let count=0;
+  currentExam.questions.forEach((q,idx)=>{
+    if(!all && answerIsComplete(q))return;
+    count++;
+    const row=document.createElement("div");row.className="answer-row";
+    row.innerHTML=`<strong>${q.num}</strong><div><div style="font-size:0.83rem;font-weight:700;">${types[q.type] || q.type}${q.images.length?" · 그림 포함":""}</div><div style="font-size:0.8rem;color:var(--muted);">${escapeHtml(q.prompt.split("\n")[0].slice(0,75))}</div><div id="answer-status-${idx}" class="${answerIsComplete(q)?"answer-ready":"answer-missing"}">${answerIsComplete(q)?"입력 완료":"미입력"}</div></div><div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div><button type="button" class="btn btn-light btn-sm" onclick="focusQuestion(${idx})">문제 보기·수정</button>`;
+    list.appendChild(row);
+  });
+  if(!count)list.innerHTML='<div style="padding:20px;color:var(--green);">정답 입력 완료! 전체 정답을 확인하려면 ‘완료한 정답도 보기’를 선택하세요.</div>';
+}
+function showAnswerKeyPreview() {
+  document.getElementById("pvTitle").textContent="정답지 원본 (교사용)";
+  document.getElementById("pvSaveBtn").style.display="none";
+  document.getElementById("previewBody").innerHTML=(currentExam.answer_key_pages || []).map((url)=>`<img src="${url}" style="max-width:100%;height:auto;" alt="교사용 정답지" />`).join("");
+  document.getElementById("previewModal").classList.add("show");
+}
+
 function responseEditorHtml(q, idx) {
   const values = responseValues(q);
   const rows = q.response_items.map((item, ri)=>{
@@ -2109,6 +2343,8 @@ function setResponseAnswer(idx, row, value) {
   const q = currentExam.questions[idx], values = responseValues(q);
   values[row] = value;
   q.answer = JSON.stringify(q.response_items.map((_,i)=>values[i] || ""));
+  delete q.answer_source;
+  updateReviewSummary();
 }
 function setBlankOptions(idx, row, text) {
   const q=currentExam.questions[idx];
@@ -2144,7 +2380,11 @@ function removeResponseItem(idx) {
 function renderEditorQuestions() {
   const list = document.getElementById("questionsEditorList");
   list.innerHTML = "";
+  updateReviewSummary();
+  if(editorView==="answers"){renderCompactAnswerTable(list);return;}
   currentExam.questions.forEach((q, idx) => {
+    if(focusedQuestionNum!==null && q.num!==focusedQuestionNum)return;
+    if(editorView==="review" && !questionReviewReasons(q).length)return;
     const card = document.createElement("div");
     card.className = "q-edit-card";
     prepareQuestion(q,false);
@@ -2184,6 +2424,7 @@ function renderEditorQuestions() {
       </div>`;
 
     card.innerHTML = `
+      ${focusedQuestionNum!==null?`<button type="button" class="btn btn-light btn-sm" style="margin-bottom:10px;" onclick="setEditorView('answers')">← 정답표로 돌아가기</button>`:""}
       <div class="q-edit-top">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <strong style="color:var(--navy);font-size:1rem;">${q.num}번</strong>
@@ -2199,7 +2440,7 @@ function renderEditorQuestions() {
           <button type="button" class="btn btn-red btn-sm" onclick="deleteQuestion(${idx})">삭제</button>
         </div>
       </div>
-      <div class="field"><label>문제 내용 (질문·지문·보기 설명)</label><textarea rows="6" placeholder="질문, 지문, 보기 설명을 순서대로 적으세요." onchange="currentExam.questions[${idx}].prompt=this.value">${escapeHtml(q.prompt || "")}</textarea></div>
+      <div class="field"><label>문제 내용 (질문·지문·보기 설명)</label><textarea rows="6" placeholder="질문, 지문, 보기 설명을 순서대로 적으세요." onchange="currentExam.questions[${idx}].prompt=this.value;updateReviewSummary()">${escapeHtml(q.prompt || "")}</textarea></div>
       ${imgsHtml}
       ${imgToolsHtml}
       ${choicesHtml}
@@ -2214,6 +2455,7 @@ function renderEditorQuestions() {
     });
     list.appendChild(card);
   });
+  if(!list.children.length)list.innerHTML='<div style="padding:20px;color:var(--green);">내용 확인이 필요한 문항이 없습니다. 정답표에서 남은 정답만 입력하세요.</div>';
 }
 
 function setQAnswer(idx, val) {
@@ -2227,6 +2469,7 @@ function setQAnswer(idx, val) {
   } else {
     q.answer = String(val).trim();
   }
+  delete q.answer_source;
   renderEditorQuestions();
 }
 function changeQType(idx, newType) {
@@ -2455,6 +2698,7 @@ function deleteQuestion(idx) {
   if (currentExam.questions.length <= 1) return alert("최소 1문항 이상 있어야 합니다.");
   currentExam.questions.splice(idx, 1);
   currentExam.questions.forEach((q, i) => { q.num = i + 1; });
+  focusedQuestionNum=null;
   renderEditorQuestions();
 }
 
@@ -2462,18 +2706,18 @@ document.getElementById("addQuestionBtn").addEventListener("click", () => {
   const n = currentExam.questions.length + 1;
   currentExam.questions.push({
     num: n, type: "choice", multi: false, prompt: `${n}번 문항`, passage: "",
-    choices: ["①", "②", "③", "④", "⑤"], images: [], answer: "1", points: 1, explain: ""
+    choices: ["①", "②", "③", "④", "⑤"], images: [], answer: "", points: 1, explain: ""
   });
-  renderEditorQuestions();
+  focusQuestion(currentExam.questions.length-1);
 });
 document.getElementById("applyFastAnswersBtn").addEventListener("click", () => {
   const text=document.getElementById("fastAnswersInput").value.trim();
-  const parts=text.split(text.includes(";") ? /;/ : text.includes(",") ? /,/ : text.includes("\n") ? /\n/ : /\s+/).map((s)=>s.trim()).filter(Boolean);
   try {
-    const values=parts.slice(0,currentExam.questions.length).map((ans,i)=>bulkAnswerValue(currentExam.questions[i],ans));
-    values.forEach((ans,i)=>{currentExam.questions[i].answer=ans;});
+    const updates=planAnswerUpdates(currentExam.questions,text);
+    updates.forEach(({index,value})=>{currentExam.questions[index].answer=value;delete currentExam.questions[index].answer_source;});
+    editorNotice(`${updates.length}문항의 정답을 적용했습니다.`);
     renderEditorQuestions();
-  } catch(error) {alert(error.message);}
+  } catch(error) {editorNotice(error.message);}
 });
 document.getElementById("closeEditorBtn").addEventListener("click", () => {
   document.getElementById("editorSection").classList.remove("show");
@@ -2484,7 +2728,7 @@ document.getElementById("manualNewBtn").addEventListener("click", () => {
     id: null, title: "새 시험지", mode: "cards", header_logo: "", page_images: [],
     questions: [1, 2, 3, 4, 5].map((n) => ({
       num: n, type: "choice", multi: false, prompt: `${n}번 문제`, passage: "",
-      choices: ["보기 1", "보기 2", "보기 3", "보기 4", "보기 5"], images: [], answer: "1", points: 1, explain: ""
+      choices: ["보기 1", "보기 2", "보기 3", "보기 4", "보기 5"], images: [], answer: "", points: 1, explain: ""
     })),
     show_score_to_student: true, is_open: true,
   });
@@ -2562,6 +2806,15 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   }
   currentExam.entry_pin = pinStr;
   currentExam.max_away_count = Math.max(0, parseInt(document.getElementById("edMaxAway").value, 10) || 0);
+  const readiness=examReadiness(currentExam);
+  if(readiness.missing.length) {
+    setEditorView("answers");editorNotice(`정답 ${readiness.missing.length}개가 비어 있거나 형식이 맞지 않습니다. 남은 정답을 입력하면 QR을 발급할 수 있습니다.`);
+    const first=currentExam.questions.findIndex((q)=>q.num===readiness.missing[0]);
+    document.getElementById(`answer-inputs-${first}`)?.querySelector("input,select,button")?.focus();
+    return;
+  }
+  if(readiness.review.length){setEditorView("review");editorNotice(`내용 확인이 필요한 문항 ${readiness.review.length}개를 수정해 주세요.`);return;}
+  editorNotice("");
   if (!currentExam.id) currentExam.id = Math.random().toString(36).slice(2, 10);
 
   btn.disabled = true;
