@@ -234,6 +234,14 @@
       </div>
     </div>
 
+    <div id="importVariantWrap" class="editor-bar" style="display:none;">
+      <div class="field" style="margin:0;flex:1;">
+        <label for="importVariantSelect">가져올 시험지</label>
+        <select id="importVariantSelect" onchange="selectImportVariant(this.value)"></select>
+        <div style="margin-top:6px;font-size:0.83rem;color:var(--muted);">이 파일에는 여러 시험지가 있습니다. 같은 시험지의 인쇄용 복사본은 하나로 합쳤습니다. 선택한 구성만 저장·배포됩니다.</div>
+      </div>
+    </div>
+
     <div class="editor-bar">
       <div id="edLogoWrap" style="display:none;align-items:center;gap:6px;">
         <img id="edLogoImg" style="height:44px;border-radius:8px;border:1px solid var(--border);background:#fff;" />
@@ -521,8 +529,13 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 /* ======================== CLIENT-SIDE PARSERS ======================== */
 function cleanText(text) {
   return String(text || "")
+    .normalize("NFC")
     .replace(/\u00a0/g, " ")
-    .replace(/[\uE000-\uF8FF]/g, "○")
+    .replace(/[\u200B\uFEFF]/g, "")
+    .replace(/[\u2028\u2029\f\v]/g, "\n")
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[．]/g, ".")
+    .replace(/[）]/g, ")")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
@@ -559,24 +572,27 @@ function compressImageFromBlobOrCanvas(src, maxWidth = 760) {
 }
 
 function extractInlineChoices(line) {
-  const parts = line.split(/([①②③④⑤])/);
-  if (parts.length < 3) return { prefix: line, found: [] };
-  const prefix = parts[0].trim();
+  // Parenthesized choices may share one line or span several paragraphs.
+  let matches = [...line.matchAll(/[①②③④⑤❶❷❸❹❺]|\(([1-5])\)/g)];
+  if (matches.length === 1 && matches[0][1] && (matches[0].index > 0 || !/\s/.test(line[matches[0][0].length] || ""))) matches = [];
+  if (matches.length && matches.every((m) => m[1]) && !line.slice(matches[matches.length - 1].index + 3).trim()) matches = [];
+  if (!matches.length) return { prefix: line, found: [] };
+  const prefix = line.slice(0, matches[0].index).trim();
   const found = [];
-  for (let i = 1; i + 1 < parts.length; i += 2) {
-    const idx = CIRCLED.indexOf(parts[i]);
-    if (idx !== -1) found.push([idx, parts[i + 1].trim()]);
-  }
+  matches.forEach((m, i) => {
+    const idx = m[1] ? Number(m[1]) - 1 : "①②③④⑤❶❷❸❹❺".indexOf(m[0]) % 5;
+    found.push([idx, line.slice(m.index + m[0].length, matches[i + 1]?.index ?? line.length).trim()]);
+  });
   return { prefix, found };
 }
 
 function splitBlocksToQuestions(blocks) {
-  const qStartRe = /^\s*(?:문\s*)?(\d{1,2})\s*[.)\]]\s*(.*)$/;
-  const groupRe = /^\s*\[\s*(\d{1,2})\s*[~\-–]\s*(\d{1,2})\s*\]\s*(.*)$/;
-  const parenRe = /^\s*\(([1-5])\)\s*(.+)$/;
+  const qStartRe = /^\s*(?:(?:문(?:제)?\s*)?(\d{1,3})\s*[.)\]:：]|(\d{1,3})\s*번(?=\s|[.)]|$)(?:\s*[.)])?|(\d{1,3})[ \t]+)\s*(.*)$/;
+  const groupRe = /^\s*\[\s*(\d{1,3})\s*[~～\-–]\s*(\d{1,3})\s*\]\s*(.*)$/;
   const slashRe = /\(\s*([^()/]{2,60}?)\s*\/\s*([^()/]{2,60}?)\s*\)/;
 
   const questions = [];
+  const matchingGroups = new Set();
   let current = null;
   let activeGroup = null;
   const leadingTexts = [];
@@ -586,12 +602,13 @@ function splitBlocksToQuestions(blocks) {
   function finalize() {
     if (!current) return;
     const grp = current._group;
-    let prompt = current.prompt.trim();
+    let prompt = current.prompt.trim().replace(/(?:\s*[…⋯]+\s*|\s*[·.]{2,}\s*)\(\s*(?:,\s*)?\)\s*$/g, "").trim();
     let passageLines = [...current.passageLines];
     if (grp) {
-      if (!prompt) prompt = grp.prompt;
-      else if (grp.prompt && !prompt.includes(grp.prompt)) {
-        prompt = `[${grp.start}~${grp.end}] ${grp.prompt}\n${prompt}`.trim();
+      const grpPrompt = grp.prompt.replace(/(?:\s*[…⋯]+\s*|\s*[·.]{2,}\s*)\(\s*(?:,\s*)?\)\s*$/g, "").trim();
+      if (!prompt) prompt = grpPrompt;
+      else if (grpPrompt && !prompt.includes(grpPrompt)) {
+        prompt = `[${grp.start}~${grp.end}] ${grpPrompt}\n${prompt}`.trim();
       }
       if (grp.passageLines.length) {
         const shared = grp.passageLines.join("\n");
@@ -600,14 +617,18 @@ function splitBlocksToQuestions(blocks) {
     }
     if (!prompt) prompt = `${current.num}번 문항`;
     const passage = passageLines.join("\n").trim();
-    const isMulti = prompt.includes("모두 고르") || prompt.includes("모두 선택");
+    const combinedText = `${prompt}\n${passage}`;
+    const isMulti = combinedText.includes("모두 고르") || combinedText.includes("모두 선택");
 
     const keys = Object.keys(current._choicesMap).map(Number);
     let choices = [];
     let qType = "short";
-    if (keys.length) {
+    if (keys.length >= 2 || (keys.length === 1 && current._hasCircledChoice)) {
       const maxIdx = Math.max(...keys);
       for (let i = 0; i <= maxIdx; i++) choices.push(current._choicesMap[i] || CIRCLED[i] || `보기 ${i + 1}`);
+      qType = "choice";
+    } else if (/[○◯][\s\S]*[×☓]/.test(combinedText) && !/\(1\)/.test(passage)) {
+      choices = ["○", "×"];
       qType = "choice";
     } else {
       const mSlash = slashRe.exec(passage) || slashRe.exec(prompt);
@@ -617,18 +638,32 @@ function splitBlocksToQuestions(blocks) {
       }
     }
 
-    questions.push({
+    const mergedImgs = [];
+    if (grp && grp.images && grp.images.length) {
+      grp.images.forEach((u) => { if (!mergedImgs.includes(u)) mergedImgs.push(u); });
+    }
+    current.images.forEach((u) => { if (!mergedImgs.includes(u)) mergedImgs.push(u); });
+
+    const question = {
       num: current.num,
       type: qType,
       multi: isMulti,
       prompt,
       passage,
       choices,
-      images: current.images,
+      images: mergedImgs,
       answer: qType === "choice" ? "1" : "",
       points: 1,
       explain: "",
-    });
+    };
+    questions.push(question);
+    if (grp && /연결/.test(`${grp.prompt} ${grp.passageLines.join(" ")}`)) {
+      if (!grp.members) { grp.members = []; grp.choiceMap = {}; grp.figureUrls = []; }
+      grp.members.push(question);
+      Object.assign(grp.choiceMap, current._choicesMap);
+      mergedImgs.forEach((u) => { if (!grp.figureUrls.includes(u)) grp.figureUrls.push(u); });
+      matchingGroups.add(grp);
+    }
     current = null;
   }
 
@@ -640,13 +675,25 @@ function splitBlocksToQuestions(blocks) {
         if (!isFlatBanner) leadingImages.push(blk.url);
         continue;
       }
-      if (current && !isFlatBanner) current.images.push(blk.url);
+      if (!isFlatBanner) {
+        if (current) current.images.push(blk.url);
+        else if (activeGroup) activeGroup.images.push(blk.url);
+      }
       continue;
     }
 
     for (const rawLine of blk.text.split("\n")) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith("*실수한 것이 없는지")) continue;
+      const line = cleanText(rawLine);
+      if (
+        !line ||
+        line.startsWith("*실수한 것이 없는지") ||
+        /^<지필평가>$/.test(line) ||
+        /^초등학교\s*\d+학년.*이름\s*:?$/.test(line) ||
+        /^♡/.test(line) ||
+        /^다 한 친구들은/.test(line) ||
+        /^반,\s*번호,\s*이름/.test(line) ||
+        /^확인해 보세요/.test(line)
+      ) continue;
 
       const mGrp = groupRe.exec(line);
       if (mGrp) {
@@ -657,15 +704,18 @@ function splitBlocksToQuestions(blocks) {
           end: Number(mGrp[2]),
           prompt: mGrp[3].trim(),
           passageLines: [],
+          images: [],
         };
         continue;
       }
 
       const mQ = qStartRe.exec(line);
       if (mQ) {
-        const qNum = Number(mQ[1]);
-        const rest = mQ[2].trim();
-        if (qNum >= 1 && qNum <= 50 && (!current || qNum === current.num + 1 || qNum > current.num)) {
+        const qNum = Number(mQ[1] || mQ[2] || mQ[3]);
+        const rest = mQ[4].trim();
+        const bareNumberLooksLikeQuestion = !mQ[3] || /^0/.test(mQ[3]) ||
+          qNum === (current ? current.num + 1 : 1) || /[?？]|세요|고르|쓰시오|구하|무엇|답하/.test(rest);
+        if (qNum >= 1 && qNum <= 999 && bareNumberLooksLikeQuestion && (!current || qNum > current.num)) {
           seenFirst = true;
           finalize();
           if (activeGroup && !(qNum >= activeGroup.start && qNum <= activeGroup.end)) {
@@ -674,13 +724,13 @@ function splitBlocksToQuestions(blocks) {
           const { prefix, found } = extractInlineChoices(rest);
           current = {
             num: qNum,
-            prompt: prefix || rest,
+            prompt: prefix,
             passageLines: [],
             _choicesMap: {},
             images: [],
             _group: activeGroup,
           };
-          found.forEach(([ci, txt]) => { current._choicesMap[ci] = txt; });
+          found.forEach(([ci, txt]) => { current._choicesMap[ci] = txt; current._hasCircledChoice = true; });
           continue;
         }
       }
@@ -695,16 +745,17 @@ function splitBlocksToQuestions(blocks) {
       }
       if (!current) continue;
 
-      if (/[①②③④⑤]/.test(line)) {
-        const { prefix, found } = extractInlineChoices(line);
-        if (prefix) current.passageLines.push(prefix);
-        found.forEach(([ci, txt]) => { current._choicesMap[ci] = txt; });
+      // In O/X and T/F tasks, (1), (2) label separate answer blanks,
+      // not alternative answers to one multiple-choice question.
+      if (/^\([1-5]\)/.test(line) && /[○◯×☓]|\bT\b.*\bF\b/.test(`${current.prompt}\n${current.passageLines.join("\n")}`)) {
+        current.passageLines.push(line);
         continue;
       }
 
-      const mParen = parenRe.exec(line);
-      if (mParen && !/\(\s*\)\s*(?:\*|$)/.test(line)) {
-        current._choicesMap[Number(mParen[1]) - 1] = mParen[2].trim();
+      if (/[①②③④⑤❶❷❸❹❺]/.test(line) || /^\([1-5]\)/.test(line)) {
+        const { prefix, found } = extractInlineChoices(line);
+        if (prefix) current.passageLines.push(prefix);
+        found.forEach(([ci, txt]) => { current._choicesMap[ci] = txt; current._hasCircledChoice = true; });
         continue;
       }
 
@@ -718,6 +769,12 @@ function splitBlocksToQuestions(blocks) {
     }
   }
   finalize();
+  matchingGroups.forEach((grp) => {
+    const keys = Object.keys(grp.choiceMap).map(Number);
+    if (!keys.length) return;
+    const choices = Array.from({ length: Math.max(...keys) + 1 }, (_, i) => grp.choiceMap[i] || CIRCLED[i]);
+    grp.members.forEach((q) => { q.type = "choice"; q.choices = [...choices]; q.images = [...grp.figureUrls]; });
+  });
 
   let docTitle = "";
   for (const lt of leadingTexts) {
@@ -739,9 +796,170 @@ function splitBlocksToQuestions(blocks) {
       }],
       docTitle,
       headerLogo,
+      detected_count: 0,
     };
   }
-  return { questions, docTitle, headerLogo };
+  return { questions, docTitle, headerLogo, detected_count: questions.length };
+}
+
+function xmlElements(node, name) {
+  return Array.from(node.getElementsByTagName("*")).filter((el) => el.localName === name);
+}
+
+function questionParseWarnings(questions) {
+  const nums = questions.filter((q) => q.type === "short" && /\(1\)/.test(q.passage) && /\(2\)/.test(q.passage)).map((q) => q.num);
+  return nums.length ? [`${nums.join(", ")}번은 여러 답칸을 주관식 한 칸으로 가져왔습니다. 답을 순서대로 쓰도록 질문과 정답을 확인해 주세요.`] : [];
+}
+
+function readHwpxXml(text) {
+  const doc = new DOMParser().parseFromString(text, "text/xml");
+  if (xmlElements(doc, "parsererror").length) throw new Error("HWPX 문서의 XML 구조가 손상되었습니다.");
+  return doc;
+}
+
+// Walk in document order: an outer paragraph can contain both its own text
+// and paragraphs in tables/text boxes. Skipping it loses the question stem.
+function hwpxSectionBlocks(doc, imgMap, numbering = () => "") {
+  const blocks = [];
+  const ignored = new Set(["header", "footer", "footNote", "endNote", "linesegarray"]);
+  let text = "";
+  function flush() {
+    const cleaned = cleanText(text);
+    if (cleaned) blocks.push({ type: "text", text: cleaned });
+    text = "";
+  }
+  function walk(node, inText = false) {
+    if (node.nodeType === 3 || node.nodeType === 4) {
+      if (inText) text += node.nodeValue;
+      return;
+    }
+    if (node.nodeType !== 1 && node.nodeType !== 9) return;
+    const tag = node.localName;
+    if (ignored.has(tag)) return;
+    if (tag === "p") { flush(); text += numbering(node); }
+    if (tag === "lineBreak") { text += "\n"; return; }
+    if (tag === "tab" || tag === "fwSpace" || tag === "nbSpace") { text += " "; return; }
+    if (tag === "autoNum") {
+      if (node.getAttribute("numType") === "QUESTION") text += `${node.getAttribute("num")}. `;
+      return;
+    }
+    if (tag === "equation") {
+      const script = xmlElements(node, "script")[0];
+      if (script?.textContent) text += ` [수식: ${script.textContent}] `;
+      return;
+    }
+    if (tag === "img") {
+      flush();
+      const ref = node.getAttribute("binaryItemIDRef") || node.getAttribute("binItem") || "";
+      if (imgMap[ref]) blocks.push({ type: "image", ...imgMap[ref] });
+      return;
+    }
+    for (const child of Array.from(node.childNodes || [])) walk(child, inText || tag === "t");
+    if (tag === "p") flush();
+  }
+  walk(doc);
+  flush();
+  return blocks;
+}
+
+function hwpxNumbering(header) {
+  const properties = new Map();
+  const definitions = new Map();
+  const counts = new Map();
+  xmlElements(header, "paraPr").forEach((p) => {
+    const h = xmlElements(p, "heading")[0];
+    if (h?.getAttribute("type") === "NUMBER") properties.set(p.getAttribute("id"), h);
+  });
+  xmlElements(header, "numbering").forEach((n) => definitions.set(n.getAttribute("id"), n));
+  return (p) => {
+    const heading = properties.get(p.getAttribute("paraPrIDRef"));
+    if (!heading) return "";
+    const level = Number(heading.getAttribute("level") || 0);
+    const id = heading.getAttribute("idRef");
+    const def = definitions.get(id);
+    const head = def && xmlElements(def, "paraHead").find((h) => Number(h.getAttribute("level")) === level + 1);
+    const format = head?.getAttribute("numFormat");
+    // Do not turn Korean/roman outline headings into exam question numbers.
+    if (format !== "DIGIT" && format !== "CIRCLED_DIGIT" && format !== "DIGIT_CIRCLE") return "";
+    const key = `${id}:${level}`;
+    const start = Number(head.getAttribute("start") || def.getAttribute("start") || 1);
+    const num = (counts.get(key) ?? (start - 1)) + 1;
+    counts.set(key, num);
+    if (format !== "DIGIT") return CIRCLED[num - 1] ? `${CIRCLED[num - 1]} ` : `${num}) `;
+    return `${num}. `;
+  };
+}
+
+function detectFrequencyGraph(docs, blocks) {
+  if (!/막대\s*그래프[\s\S]{0,40}그려/.test(blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n"))) return null;
+  const graphs = docs.flatMap((doc) => xmlElements(doc, "tbl")).map((tbl) => {
+    const text = xmlElements(tbl, "t").map((t) => t.textContent).join("");
+    const labels = [...text.matchAll(/\[(\d{1,2})\]/g)].map((m) => Number(m[1]));
+    return /빈\s*도\s*수/.test(text) && labels.length >= 2 ? labels : null;
+  }).filter(Boolean);
+  if (!graphs.length) return null;
+  // Multiple identical handout copies on one sheet are one set of tasks.
+  const key = JSON.stringify(graphs[0]);
+  if (graphs.some((labels) => JSON.stringify(labels) !== key)) return null;
+  return { labels: [...new Set(graphs[0])], copies: graphs.length };
+}
+
+function tableQuizVariants(docs, imgMap, blocks = []) {
+  const variants = [];
+  const signatures = new Set();
+  const tables = docs.flatMap((doc) => xmlElements(doc, "tbl"));
+  const writingInstruction = blocks.find((b)=>b.type === "text" && /문장의\s*첫.*대문자/.test(b.text))?.text || "";
+  const textOf = (node) => xmlElements(node, "p").map((p) => xmlElements(p, "t").map((t) => t.textContent).join("")).join("\n").trim();
+  const isWordTable = (table) => {
+    const text = textOf(table);
+    return /영어/.test(text) && /한국어/.test(text) && /No\./i.test(text) && /Test\s*\(/i.test(text);
+  };
+  for (let ti = 0; ti < tables.length; ti++) {
+    const table = tables[ti];
+    if (!isWordTable(table)) continue;
+    const title = xmlElements(table, "t").map((t)=>t.textContent.trim()).find((s)=>/Test\s*\(/i.test(s));
+    const questions = [];
+    for (const row of Array.from(table.childNodes).filter((n)=>n.localName === "tr")) {
+      const cells = new Map();
+      Array.from(row.childNodes).filter((n)=>n.localName === "tc").forEach((cell, i) => {
+        const addr = xmlElements(cell,"cellAddr")[0];
+        cells.set(Number(addr?.getAttribute("colAddr") ?? i), textOf(cell));
+      });
+      for (const [col, text] of cells) {
+        if (!/^\d{1,2}$/.test(text) || !cells.has(col+1) || !cells.has(col+2)) continue;
+        const english = cells.get(col+1), korean = cells.get(col+2);
+        const blankEnglish = !english.replace(/[\s_＿.\-…]/g, "");
+        questions.push({ num: Number(text), type: "short", multi: false,
+          prompt: blankEnglish ? "우리말 뜻에 맞는 영어 단어를 쓰세요." : "영어 단어의 우리말 뜻을 쓰세요.",
+          passage: `영어: ${english || "________"}\n한국어: ${korean || "________"}`,
+          choices: [], images: [], answer: "", points: 1, explain: "" });
+      }
+    }
+    questions.sort((a,b)=>a.num-b.num);
+    if (!questions.length || questions.some((q,i)=>q.num!==i+1)) continue;
+    // The next small table contains sentence questions belonging to this test,
+    // before the next word table starts a different printed version.
+    const lastWord = questions[questions.length-1].num;
+    for (let j=ti+1; j<tables.length && !isWordTable(tables[j]); j++) {
+      const parsed = splitBlocksToQuestions(hwpxSectionBlocks(tables[j], imgMap));
+      if (parsed.detected_count) parsed.questions.filter((q)=>q.num>lastWord).forEach((q)=>{
+        q.passage = [writingInstruction, q.passage].filter(Boolean).join("\n");
+        questions.push(q);
+      });
+    }
+    const signature = JSON.stringify({title,questions});
+    if (!signatures.has(signature)) {
+      signatures.add(signature);
+      variants.push({title,questions});
+    }
+  }
+  const counts = new Map();
+  variants.forEach((variant)=>{
+    const count = (counts.get(variant.title)||0)+1;
+    counts.set(variant.title,count);
+    variant.label = `${variant.title}${count>1 ? ` · 다른 문장 구성 ${count}` : ""} (${variant.questions.length}문항)`;
+  });
+  return variants;
 }
 
 async function parseHwpxFile(file) {
@@ -762,118 +980,444 @@ async function parseHwpxFile(file) {
     }
   }
 
+  // Manifest IDs are not required to match the image's filename.
+  const manifestName = entries.find((n) => /^Contents\/content\.hpf$/i.test(n));
+  if (manifestName) {
+    const manifest = readHwpxXml(await zip.files[manifestName].async("string"));
+    xmlElements(manifest, "item").forEach((item) => {
+      const href = (item.getAttribute("href") || "").split("/").pop();
+      if (imgMap[href]) imgMap[item.getAttribute("id")] = imgMap[href];
+    });
+  }
+
   const sections = entries
     .filter((n) => /^Contents\/section\d+\.xml$/i.test(n))
     .sort((a, b) => Number(a.replace(/\D/g, "") || 0) - Number(b.replace(/\D/g, "") || 0));
 
   const blocks = [];
-  const usedUrls = new Set();
-  const parser = new DOMParser();
+  const sectionDocs = [];
+  if (!sections.length) throw new Error("HWPX 파일에 본문 구역이 없습니다.");
+  const headerName = entries.find((n) => /^Contents\/header\.xml$/i.test(n));
+  const numbering = headerName
+    ? hwpxNumbering(readHwpxXml(await zip.files[headerName].async("string")))
+    : () => "";
 
   for (const sec of sections) {
     const xmlStr = await zip.files[sec].async("string");
-    const doc = parser.parseFromString(xmlStr, "text/xml");
-    const allElems = doc.getElementsByTagName("*");
-    for (const el of allElems) {
-      if (el.localName !== "p") continue;
-      // Skip outer container paragraphs that contain nested <p> or <tbl>
-      let hasNested = false;
-      for (const sub of el.getElementsByTagName("*")) {
-        if (sub !== el && (sub.localName === "p" || sub.localName === "tbl")) {
-          hasNested = true;
-          break;
-        }
-      }
-      if (hasNested) continue;
-
-      for (const sub of el.getElementsByTagName("*")) {
-        if (sub.localName === "img") {
-          const ref = sub.getAttribute("binaryItemIDRef") || sub.getAttribute("binItem") || "";
-          if (imgMap[ref]) {
-            usedUrls.add(imgMap[ref].url);
-            blocks.push({ type: "image", ...imgMap[ref] });
-          }
-        }
-      }
-      let txt = "";
-      for (const sub of el.getElementsByTagName("*")) {
-        if (sub.localName === "t" && sub.textContent) txt += sub.textContent;
-      }
-      const cleaned = cleanText(txt);
-      if (cleaned) blocks.push({ type: "text", text: cleaned });
-    }
+    const doc = readHwpxXml(xmlStr);
+    sectionDocs.push(doc);
+    blocks.push(...hwpxSectionBlocks(doc, imgMap, numbering));
   }
 
-  Object.values(imgMap).forEach((info) => {
-    if (!usedUrls.has(info.url)) {
-      usedUrls.add(info.url);
-      blocks.push({ type: "image", ...info });
-    }
-  });
-
-  const { questions, docTitle, headerLogo } = splitBlocksToQuestions(blocks);
+  // Unreferenced BinData may be a deleted image; never append it to the last question.
+  const variants = tableQuizVariants(sectionDocs, imgMap, blocks);
+  if (variants.length) {
+    return { mode: "cards", page_images: [], questions: variants[0].questions,
+      suggested_title: variants[0].title, header_logo: "", detected_count: variants[0].questions.length, variants,
+      warnings: variants.length > 1 ? [`${variants.length}가지 시험지 구성을 찾았습니다. 편집 화면의 ‘가져올 시험지’에서 사용할 구성을 선택해 주세요.`] : [] };
+  }
+  const { questions, docTitle, headerLogo, detected_count } = splitBlocksToQuestions(blocks);
   return {
     mode: "cards",
     page_images: [],
     questions,
     suggested_title: docTitle || file.name.replace(/\.[^.]+$/, ""),
     header_logo: headerLogo,
+    detected_count,
+    graph_task: detectFrequencyGraph(sectionDocs, blocks),
+    warnings: detected_count ? questionParseWarnings(questions) : ["문항 번호를 찾지 못했습니다. 추출된 내용을 직접 나누고 편집해 주세요."],
   };
+}
+
+async function extractPdfImageRects(page, viewport, scale) {
+  const rects = [];
+  if (typeof pdfjsLib === "undefined" || !pdfjsLib.OPS || !pdfjsLib.Util) return rects;
+  const OPS = pdfjsLib.OPS;
+  const opList = await page.getOperatorList();
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i];
+    const args = opList.argsArray[i];
+    if (fn === OPS.save) {
+      stack.push(ctm.slice());
+    } else if (fn === OPS.restore) {
+      if (stack.length) ctm = stack.pop();
+    } else if (fn === OPS.transform && Array.isArray(args) && args.length === 6) {
+      ctm = pdfjsLib.Util.transform(ctm, args);
+    } else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push(ctm.slice());
+      if (args && Array.isArray(args[0]) && args[0].length === 6) {
+        ctm = pdfjsLib.Util.transform(ctm, args[0]);
+      }
+    } else if (fn === OPS.paintFormXObjectEnd) {
+      if (stack.length) ctm = stack.pop();
+    } else if (
+      fn === OPS.paintImageXObject ||
+      fn === OPS.paintInlineImageXObject ||
+      fn === OPS.paintImageMaskXObject ||
+      fn === OPS.paintSolidColorImageMask
+    ) {
+      const m = pdfjsLib.Util.transform(viewport.transform, ctm);
+      const pts = [
+        pdfjsLib.Util.applyTransform([0, 0], m),
+        pdfjsLib.Util.applyTransform([1, 0], m),
+        pdfjsLib.Util.applyTransform([0, 1], m),
+        pdfjsLib.Util.applyTransform([1, 1], m),
+      ];
+      const xs = pts.map((pt) => pt[0]);
+      const ys = pts.map((pt) => pt[1]);
+      const x0 = Math.max(0, Math.min(...xs));
+      const y0 = Math.max(0, Math.min(...ys));
+      const x1 = Math.min(viewport.width, Math.max(...xs));
+      const y1 = Math.min(viewport.height, Math.max(...ys));
+      const w = x1 - x0;
+      const h = y1 - y0;
+      if (w >= 12 * scale && h >= 12 * scale && !(w > viewport.width * 0.88 && h > viewport.height * 0.88)) {
+        rects.push({ x0, y0, x1, y1 });
+      }
+    }
+  }
+  return rects;
+}
+
+function joinPdfLineItems(items, scale) {
+  const sorted = [...items].sort((a, b) => a.x0 - b.x0);
+  let out = "";
+  let prevEnd = null;
+  for (const it of sorted) {
+    if (prevEnd !== null) {
+      const gap = it.x0 - prevEnd;
+      if (gap > Math.max(2.5 * scale, it.h * 0.32) && !out.endsWith(" ")) out += " ";
+    }
+    out += it.str;
+    prevEnd = Math.max(prevEnd || 0, it.x1);
+  }
+  return cleanText(out);
+}
+
+function sectionWorksheetPlan(pages) {
+  const seen = new Set();
+  const sections = [];
+  const excludedPages = [];
+  const usedPages = [];
+  for (const page of pages) {
+    const headings = page.items.map((it) => ({ ...it, section: /^\s*(VIII|VII|VI|IV|III|II|IX|V|X|I)(?:[.]|\s|$)/.exec(it.str)?.[1] }))
+      .filter((it) => it.section && it.x0 < page.width * 0.16 && it.y0 > page.height * 0.04)
+      .sort((a, b) => a.y0 - b.y0);
+    if (!headings.length) return null;
+    if (headings.filter((h) => seen.has(h.section)).length >= 2) {
+      excludedPages.push(page.number);
+      continue;
+    }
+    usedPages.push(page.number);
+    for (let si = 0; si < headings.length; si++) {
+      const heading = headings[si];
+      if (seen.has(heading.section)) return null;
+      seen.add(heading.section);
+      const endY = headings[si + 1]?.y0 ?? page.height * 0.94;
+      const candidates = page.items.map((it) => ({ ...it, localNum: Number(/^\s*(\d{1,3})[.)](?:\s|$)/.exec(it.str)?.[1] || 0) }))
+        .filter((it) => it.localNum && it.y0 > heading.y1 && it.y0 < endY - 5)
+        .sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+      // A pictured question may repeat its number at the answer line below it.
+      const unique = new Map();
+      candidates.forEach((it) => { if (!unique.has(it.localNum)) unique.set(it.localNum, it); });
+      const anchors = [...unique.values()].sort((a, b) => a.localNum - b.localNum);
+      if (!anchors.length || anchors.some((a, i) => a.localNum !== i + 1)) return null;
+      const scoreText = page.items.filter((it)=>it.x0>page.width*0.5 && Math.abs(it.y0-heading.y0)<heading.h)
+        .sort((a,b)=>a.x0-b.x0).map((it)=>it.str).join(" ");
+      const score = (scoreText.match(/\d+/g)||[]).map(Number);
+      const points = score.length===3 && score[0]===anchors.length && score[0]*score[1]===score[2] ? score[1] : 1;
+      const columns = [];
+      [...anchors].sort((a, b) => a.x0 - b.x0).forEach((a) => {
+        if (!columns.some((x) => Math.abs(x - a.x0) < page.width * 0.08)) columns.push(a.x0);
+      });
+      const firstY = Math.min(...anchors.map((a) => a.y0));
+      const repeats = candidates.filter((c)=>unique.get(c.localNum)!==c);
+      const diagramEndY = anchors.every((a)=>Math.abs(a.y0-firstY)<a.h) && repeats.length
+        ? Math.min(...repeats.map((a)=>a.y0)) : endY;
+      const tasks = anchors.map((a) => {
+        const ci = columns.findIndex((x) => Math.abs(x - a.x0) < page.width * 0.08);
+        const nextRow = candidates.filter((other) => Math.abs(other.x0 - columns[ci]) < page.width * 0.08 && other.y0 > a.y0 + a.h * 1.5)
+          .sort((x, y) => x.y0 - y.y0)[0];
+        const x0 = ci === 0 ? page.width * 0.045 : columns[ci] - 12;
+        const x1 = columns[ci + 1] ? columns[ci + 1] - 16 : page.width * 0.96;
+        return { localNum: a.localNum, rect: { x: x0, y: a.y0 - 6, width: x1 - x0, height: Math.min(nextRow?.y0 ?? endY, endY, diagramEndY) - a.y0 - 2 } };
+      });
+      sections.push({ section: heading.section, page: page.number, points,
+        header: { x: page.width * 0.045, y: heading.y0 - 6, width: page.width * 0.915, height: firstY - heading.y0 - 4 }, tasks });
+    }
+  }
+  // Require several independent sections; a standalone English "I" is not a heading.
+  return sections.length >= 2 ? { sections, excludedPages, usedPages } : null;
+}
+
+async function cropCanvasRegion(canvas, rect) {
+  const x = Math.max(0, Math.floor(rect.x)), y = Math.max(0, Math.floor(rect.y));
+  const width = Math.min(canvas.width - x, Math.ceil(rect.width));
+  const height = Math.min(canvas.height - y, Math.ceil(rect.height));
+  if (width < 4 || height < 4) throw new Error("원본 문항 영역을 잘라낼 수 없습니다. 원본 페이지 모드로 확인해 주세요.");
+  const crop = document.createElement("canvas");
+  crop.width = width; crop.height = height;
+  crop.getContext("2d").drawImage(canvas, x, y, width, height, 0, 0, width, height);
+  const info = await compressImageFromBlobOrCanvas(crop.toDataURL("image/png"), 1000);
+  if (!info) throw new Error("문항 그림을 만들지 못했습니다. 다시 올려 주세요.");
+  return info.url;
+}
+
+async function parseSectionWorksheet(pages, pageImages, name, forcePageMode) {
+  const plan = sectionWorksheetPlan(pages);
+  if (!plan) return null;
+  const questions = [];
+  for (const sec of plan.sections) {
+    const canvas = pages.find((p) => p.number === sec.page).canvas;
+    const headerImage = await cropCanvasRegion(canvas, sec.header);
+    for (const task of sec.tasks) {
+      const questionImage = await cropCanvasRegion(canvas, task.rect);
+      questions.push({ num: questions.length + 1, type: "short", multi: false,
+        prompt: `${sec.section}-${task.localNum}. 원본 문항을 보고 답하세요.`, passage: "",
+        images: [headerImage, questionImage], choices: [], answer: "", points: sec.points, explain: "" });
+    }
+  }
+  return { mode: forcePageMode ? "omr_pages" : "cards", questions, detected_count: questions.length,
+    page_images: plan.usedPages.map((n) => pageImages[n - 1]), suggested_title: name.replace(/\.[^.]+$/, ""), header_logo: "",
+    excluded_pages: plan.excludedPages,
+    warnings: ["구역마다 반복되는 번호를 구분하고 원본 문항을 그림으로 보존했습니다. 질문에 표시된 구역·번호에 맞게 정답과 배점을 입력해 주세요.",
+      ...(plan.excludedPages.length ? [`앞 구역이 반복되는 ${plan.excludedPages.join(", ")}쪽은 정답·해설 부록으로 판단해 제외했습니다. 배포 전 페이지 미리보기를 확인해 주세요.`] : [])] };
 }
 
 async function parsePdfFile(file, forcePageMode) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const pageImages = [];
-  const textBlocks = [];
+  const blocks = [];
+  const layoutPages = [];
+  const RENDER_SCALE = 2.0;
+  const qLineRe = /^\s*(?:\[\s*\d+\s*[~\-–]\s*\d+\s*\]|(?:문\s*)?\d{1,2}\s*[.)\]])/;
+  const subQItemRe = /^\s*\d{1,2}\s*[.)\]]/;
 
   for (let p = 1; p <= pdf.numPages; p++) {
     setLoadingProgress(Math.max(12, Math.round(((p - 1) / pdf.numPages) * 85)), `PDF ${p} / ${pdf.numPages}쪽 그림·텍스트 분석 중...`);
     const page = await pdf.getPage(p);
-    const vp = page.getViewport({ scale: 1.5 });
-    const canvas = document.createElement("canvas");
-    canvas.width = vp.width;
-    canvas.height = vp.height;
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
-    const info = await compressImageFromBlobOrCanvas(canvas.toDataURL("image/jpeg", 0.82), 920);
-    if (info) pageImages.push(info.url);
+    const vp = page.getViewport({ scale: RENDER_SCALE });
+    const hiCanvas = document.createElement("canvas");
+    hiCanvas.width = Math.round(vp.width);
+    hiCanvas.height = Math.round(vp.height);
+    await page.render({ canvasContext: hiCanvas.getContext("2d"), viewport: vp }).promise;
+    const pageInfo = await compressImageFromBlobOrCanvas(hiCanvas.toDataURL("image/jpeg", 0.84), 920);
+    if (pageInfo) pageImages.push(pageInfo.url);
 
     const tc = await page.getTextContent();
-    let lastY = null;
-    let lineBuf = [];
+    const rawItems = [];
     for (const item of tc.items) {
-      const y = item.transform ? Math.round(item.transform[5]) : 0;
-      if (lastY !== null && Math.abs(y - lastY) > 4) {
-        const ln = cleanText(lineBuf.join(" "));
-        if (ln) textBlocks.push({ type: "text", text: ln });
-        lineBuf = [];
-      }
-      if (item.str) lineBuf.push(item.str);
-      lastY = y;
+      if (!item.str || !item.str.trim() || !item.transform) continue;
+      const t = pdfjsLib.Util.transform(vp.transform, item.transform);
+      const h = Math.max(8 * RENDER_SCALE, Math.hypot(t[2], t[3]) || (item.height || 10) * RENDER_SCALE);
+      const w = Math.max(2, (item.width || 0) * RENDER_SCALE);
+      const x0 = t[4];
+      const yBase = t[5];
+      rawItems.push({ str: item.str, x0, x1: x0 + w, yBase, y0: yBase - h, y1: yBase + h * 0.2, h });
     }
-    if (lineBuf.length) {
-      const ln = cleanText(lineBuf.join(" "));
-      if (ln) textBlocks.push({ type: "text", text: ln });
+    layoutPages.push({ number: p, width: vp.width, height: vp.height, canvas: hiCanvas, items: rawItems });
+
+    const imgRects = await extractPdfImageRects(page, vp, RENDER_SCALE);
+    const midX = vp.width / 2;
+    const bodyItems = rawItems.filter((it) => it.y0 > vp.height * 0.06 && it.y1 < vp.height * 0.93);
+    const leftC = bodyItems.filter((it) => it.x1 < midX - 8 * RENDER_SCALE).length;
+    const rightC = bodyItems.filter((it) => it.x0 > midX + 8 * RENDER_SCALE).length;
+    const crossC = bodyItems.filter((it) => it.x0 < midX - 10 * RENDER_SCALE && it.x1 > midX + 10 * RENDER_SCALE).length;
+    const isTwoCol = leftC >= 5 && rightC >= 5 && crossC <= Math.max(2, (leftC + rightC) * 0.06);
+    const cols = isTwoCol ? [[0, midX], [midX, vp.width]] : [[0, vp.width]];
+
+    for (const [cx0, cx1] of cols) {
+      const colItems = rawItems.filter((it) => {
+        const xc = (it.x0 + it.x1) / 2;
+        return xc >= cx0 && xc < cx1;
+      });
+      const colImgs = imgRects.filter((r) => {
+        const xc = (r.x0 + r.x1) / 2;
+        return xc >= cx0 && xc < cx1;
+      });
+
+      // Group text items into visual lines
+      colItems.sort((a, b) => a.yBase - b.yBase || a.x0 - b.x0);
+      const vLines = [];
+      for (const it of colItems) {
+        const last = vLines[vLines.length - 1];
+        if (!last || Math.abs(it.yBase - last.yBase) > Math.max(5 * RENDER_SCALE, it.h * 0.55)) {
+          vLines.push({ yBase: it.yBase, y0: it.y0, y1: it.y1, items: [it] });
+        } else {
+          last.items.push(it);
+          last.y0 = Math.min(last.y0, it.y0);
+          last.y1 = Math.max(last.y1, it.y1);
+        }
+      }
+
+      // Filter header/footer lines and split side-by-side questions (e.g. "16.   17.")
+      const parsedLines = [];
+      const qStartYs = [];
+      const splitBands = [];
+      for (const ln of vLines) {
+        ln.items.sort((a, b) => a.x0 - b.x0);
+        const fullTxt = joinPdfLineItems(ln.items, RENDER_SCALE);
+        if (!fullTxt) continue;
+        if (ln.y0 > vp.height * 0.93 && /^\d{1,2}$/.test(fullTxt)) continue;
+        if (p > 1 && ln.y0 < vp.height * 0.065) continue;
+
+        // Check for side-by-side question numbers on the same visual line
+        const splitPts = [];
+        for (let k = 1; k < ln.items.length; k++) {
+          const prev = ln.items[k - 1];
+          const cur = ln.items[k];
+          if ((cur.x0 - prev.x1) > cur.h * 2.5 && subQItemRe.test(cur.str.trim())) {
+            const leftPrefix = joinPdfLineItems(ln.items.slice(0, k), RENDER_SCALE);
+            if (subQItemRe.test(leftPrefix)) {
+              splitPts.push((prev.x1 + cur.x0) / 2);
+            }
+          }
+        }
+
+        if (splitPts.length === 1) {
+          const sx = splitPts[0];
+          const lTxt = joinPdfLineItems(ln.items.filter((it) => it.x1 <= sx), RENDER_SCALE);
+          const rTxt = joinPdfLineItems(ln.items.filter((it) => it.x0 >= sx), RENDER_SCALE);
+          qStartYs.push(ln.y0);
+          splitBands.push({ y0: ln.y0, splitX: sx, leftText: lTxt, rightText: rTxt });
+          parsedLines.push({ y0: ln.y0, y1: ln.y1, text: lTxt, subSide: "L", splitX: sx, splitY: ln.y0 });
+          parsedLines.push({ y0: ln.y0 + 0.1, y1: ln.y1, text: rTxt, subSide: "R", splitX: sx, splitY: ln.y0 });
+        } else {
+          if (qLineRe.test(fullTxt)) qStartYs.push(ln.y0);
+          parsedLines.push({ y0: ln.y0, y1: ln.y1, text: fullTxt });
+        }
+      }
+
+      // Determine end Y for each side-by-side split band
+      splitBands.forEach((sb) => {
+        const nextQ = qStartYs.find((qy) => qy > sb.y0 + 2);
+        sb.y1 = nextQ ? nextQ - 2 : vp.height;
+      });
+
+      // Cluster images vertically without crossing question starts or side-by-side splitX
+      colImgs.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+      const clusters = [];
+      for (const r of colImgs) {
+        const rxCenter = (r.x0 + r.x1) / 2;
+        const rBand = splitBands.find((sb) => r.y0 >= sb.y0 - 4 && r.y0 < sb.y1);
+        const rSide = rBand ? (rxCenter < rBand.splitX ? "L" : "R") : null;
+
+        let merged = false;
+        for (let ci = clusters.length - 1; ci >= 0; ci--) {
+          const prev = clusters[ci];
+          if (prev.subSide !== rSide) continue;
+          const crossedQ = qStartYs.some((qy) => prev.y0 + 4 * RENDER_SCALE < qy && qy <= r.y0 + 4 * RENDER_SCALE);
+          if (!crossedQ && (r.y0 - prev.y1) <= 26 * RENDER_SCALE) {
+            prev.x0 = Math.min(prev.x0, r.x0);
+            prev.y0 = Math.min(prev.y0, r.y0);
+            prev.x1 = Math.max(prev.x1, r.x1);
+            prev.y1 = Math.max(prev.y1, r.y1);
+            merged = true;
+            break;
+          }
+        }
+        if (!merged) {
+          clusters.push({ x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1, subSide: rSide, splitBand: rBand || null });
+        }
+      }
+
+      // Crop each figure cluster cleanly (including nearby ①~⑥ labels) from hiCanvas
+      const croppedClusters = [];
+      for (const cl of clusters) {
+        let bx0 = cl.x0;
+        let by0 = cl.y0;
+        let bx1 = cl.x1;
+        let by1 = cl.y1;
+        const minClampX = cl.subSide === "R" && cl.splitBand ? cl.splitBand.splitX + 2 : cx0 + 2;
+        const maxClampX = cl.subSide === "L" && cl.splitBand ? cl.splitBand.splitX - 2 : cx1 - 2;
+
+        for (const it of colItems) {
+          const st = it.str.trim();
+          if (
+            /^[①②③④⑤⑥(1)(2)•·]+$/.test(st) &&
+            it.y1 >= cl.y0 - 16 * RENDER_SCALE &&
+            it.y0 <= cl.y1 + 16 * RENDER_SCALE &&
+            it.x0 >= minClampX &&
+            it.x1 <= maxClampX
+          ) {
+            bx0 = Math.min(bx0, it.x0);
+            by0 = Math.min(by0, it.y0);
+            bx1 = Math.max(bx1, it.x1);
+            by1 = Math.max(by1, it.y1);
+          }
+        }
+
+        const padX = 12 * RENDER_SCALE;
+        const padY = 8 * RENDER_SCALE;
+        const rx = Math.max(Math.round(minClampX), Math.floor(bx0 - padX));
+        const ry = Math.max(0, Math.floor(by0 - padY));
+        const rw = Math.min(Math.round(maxClampX) - rx, Math.ceil(bx1 + padX) - rx);
+        const rh = Math.min(hiCanvas.height - ry, Math.ceil(by1 + padY) - ry);
+        if (rw < 16 || rh < 16) continue;
+
+        const cropCanvas = document.createElement("canvas");
+        cropCanvas.width = rw;
+        cropCanvas.height = rh;
+        const cctx = cropCanvas.getContext("2d");
+        cctx.fillStyle = "#ffffff";
+        cctx.fillRect(0, 0, rw, rh);
+        cctx.drawImage(hiCanvas, rx, ry, rw, rh, 0, 0, rw, rh);
+        const cInfo = await compressImageFromBlobOrCanvas(cropCanvas.toDataURL("image/jpeg", 0.9), 720);
+        if (cInfo) {
+          croppedClusters.push({ y0: cl.y0, subSide: cl.subSide, splitBand: cl.splitBand, info: cInfo });
+        }
+      }
+
+      // Emit column text + images in exact reading order (handling side-by-side bands cleanly)
+      const events = [];
+      parsedLines.forEach((pl) => {
+        const band = splitBands.find((sb) => pl.y0 >= sb.y0 - 1 && pl.y0 < sb.y1);
+        const side = pl.subSide || (band ? "L" : null);
+        events.push({ kind: "text", y0: pl.y0, sortPhase: side === "R" ? 1 : 0, band, text: pl.text });
+      });
+      croppedClusters.forEach((cc) => {
+        events.push({ kind: "image", y0: cc.y0, sortPhase: cc.subSide === "R" ? 1 : 0, band: cc.splitBand, info: cc.info });
+      });
+
+      events.sort((a, b) => {
+        if (a.band && a.band === b.band && a.sortPhase !== b.sortPhase) return a.sortPhase - b.sortPhase;
+        return a.y0 - b.y0;
+      });
+
+      for (const ev of events) {
+        if (ev.kind === "text") blocks.push({ type: "text", text: ev.text });
+        else blocks.push({ type: "image", ...ev.info });
+      }
     }
   }
 
-  const { questions, docTitle, headerLogo } = splitBlocksToQuestions(textBlocks);
+  const { questions, docTitle, headerLogo, detected_count } = splitBlocksToQuestions(blocks);
   const fallbackName = file.name.replace(/\.[^.]+$/, "");
-  if (forcePageMode || questions.length <= 1) {
-    const cnt = questions.length > 1 ? Math.max(5, questions.length) : 10;
-    const omrQs = [];
-    for (let i = 1; i <= cnt; i++) {
-      omrQs.push({
-        num: i, type: "choice", multi: false, prompt: `${i}번 문항`,
-        passage: "", choices: ["①", "②", "③", "④", "⑤"], images: [], answer: "1", points: 1, explain: ""
-      });
-    }
+  const emptyNumberLines = blocks.filter((b) => b.type === "text")
+    .flatMap((b) => b.text.split("\n")).filter((line) => /^\s*\d{1,3}[.)]\s*$/.test(line)).length;
+  if (emptyNumberLines >= Math.max(6, detected_count)) {
+    const worksheet = await parseSectionWorksheet(layoutPages, pageImages, file.name, forcePageMode);
+    if (worksheet) return worksheet;
+    return {
+      mode: "omr_pages", page_images: pageImages,
+      questions: [{ num: 1, type: "short", multi: false, prompt: "원본을 보고 문항을 직접 추가·편집해 주세요.", passage: "", choices: [], images: [], answer: "", points: 1, explain: "" }],
+      suggested_title: fallbackName, header_logo: "", detected_count: 0,
+      warnings: ["PDF에서 문제 글자가 충분히 추출되지 않아 원본 페이지로 가져왔습니다. 문항 수·질문·정답을 직접 편집하거나 원본을 HWPX로 저장해 올려 주세요. 정답·해설 페이지가 있다면 업로드 전에 제외해 주세요."],
+    };
+  }
+  if (forcePageMode || !detected_count) {
     return {
       mode: "omr_pages",
       page_images: pageImages,
-      questions: omrQs,
+      questions,
       suggested_title: docTitle || fallbackName,
       header_logo: headerLogo,
+      detected_count,
+      warnings: detected_count ? questionParseWarnings(questions) : ["PDF 문항 번호를 인식하지 못했습니다. 원본을 보고 임시 문항의 수·보기·정답을 직접 편집해 주세요."],
     };
   }
   return {
@@ -882,6 +1426,8 @@ async function parsePdfFile(file, forcePageMode) {
     questions,
     suggested_title: docTitle || fallbackName,
     header_logo: headerLogo,
+    detected_count,
+    warnings: questionParseWarnings(questions),
   };
 }
 
@@ -1015,12 +1561,76 @@ function extractSvgTextYsAndImages(svgStr) {
         rawImages.push({ y, href });
       }
     }
-    for (const ch of node.children) walk(ch, nextTy);
+    for (const ch of Array.from(node.childNodes || [])) walk(ch, nextTy);
   }
   walk(doc.documentElement, 0);
   textYs.sort((a, b) => a - b);
   rawImages.sort((a, b) => a.y - b.y);
   return { textYs, rawImages };
+}
+
+function frequencyGraphCrop(svg, labels) {
+  const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+  const root = doc.documentElement;
+  const runs = [];
+  const rects = [];
+  const multiply = (a, b) => [a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+  function walk(node, parent) {
+    if (node.nodeType !== 1) return;
+    let matrix = parent;
+    for (const match of (node.getAttribute("transform") || "").matchAll(/(matrix|translate|scale)\s*\(([^)]+)\)/g)) {
+      const n = match[2].trim().split(/[,\s]+/).map(Number);
+      const m = match[1] === "matrix" ? n : match[1] === "translate" ? [1,0,0,1,n[0],n[1] || 0] : [n[0],0,0,n[1] ?? n[0],0,0];
+      matrix = multiply(matrix, m);
+    }
+    const x = parseFloat(node.getAttribute("x")) || 0, y = parseFloat(node.getAttribute("y")) || 0;
+    const px = matrix[0]*x+matrix[2]*y+matrix[4], py = matrix[1]*x+matrix[3]*y+matrix[5];
+    if (node.localName === "text") runs.push({ text: node.textContent, x: px, y: py });
+    if (node.localName === "rect" && Math.abs(matrix[1])+Math.abs(matrix[2]) < 0.001) {
+      rects.push({ x: px, y: py, width: parseFloat(node.getAttribute("width"))*matrix[0], height: parseFloat(node.getAttribute("height"))*matrix[3] });
+    }
+    for (const ch of Array.from(node.childNodes)) walk(ch, matrix);
+  }
+  walk(root, [1,0,0,1,0,0]);
+  const rows = [];
+  runs.sort((a,b) => a.y-b.y || a.x-b.x).forEach((run) => {
+    let row = rows.find((r) => Math.abs(r.y-run.y) < 2);
+    if (!row) { row={y:run.y,runs:[]}; rows.push(row); }
+    row.runs.push(run);
+  });
+  for (const row of rows) {
+    row.runs.sort((a,b)=>a.x-b.x);
+    const chars = row.runs.flatMap((run) => Array.from(run.text).map((c) => ({ c, x: run.x })));
+    const text = chars.map((c)=>c.c).join("");
+    const positions = labels.map((n)=>text.indexOf(`[${n}]`));
+    if (positions.some((p)=>p<0)) continue;
+    const left = chars[positions[0]].x, right = chars[positions[positions.length-1]].x;
+    const nextCopy = text.indexOf(`[${labels[0]}]`, positions[positions.length-1]+1);
+    const maxWidth = nextCopy >= 0 ? chars[nextCopy].x-left+8 : Number(root.getAttribute("width"));
+    const panels = rects.filter((r)=>r.x <= left && r.x+r.width > right+10 && r.y < row.y && r.width <= maxWidth);
+    panels.sort((a,b)=>a.width-b.width || a.y-b.y);
+    if (!panels.length) continue;
+    const panel = panels[0];
+    const crop = {x: Math.max(0,panel.x-3),y:Math.max(0,panel.y-3),width:panel.width+6,height:row.y-panel.y+20};
+    root.setAttribute("viewBox", `${crop.x} ${crop.y} ${crop.width} ${crop.height}`);
+    root.setAttribute("width", String(crop.width)); root.setAttribute("height", String(crop.height));
+    return { svg: new XMLSerializer().serializeToString(doc), rect: crop };
+  }
+  return null;
+}
+
+async function parseFrequencyGraph(task, svgs, name, forcePageMode = false) {
+  const crop = frequencyGraphCrop(svgs[0], task.labels);
+  if (!crop) throw new Error("빈도 그래프의 문항 영역을 찾지 못했습니다. 원본을 PDF로 저장해 올려 주세요.");
+  const image = await renderSvgToDataUrl(crop.svg, 1000);
+  if (!image) throw new Error("빈도 그래프 그림을 만들지 못했습니다. 다시 올려 주세요.");
+  const questions = task.labels.map((label) => ({ num: label, type: "short", multi: false,
+    prompt: `[${label}] 대화를 듣고 빈도수를 숫자로 쓰세요.`, passage: "막대를 그리는 대신 해당 막대의 높이(횟수)를 숫자로 입력하세요.",
+    choices: [], images: [image], answer: "", points: 1, explain: "" }));
+  return { mode: forcePageMode ? "omr_pages" : "cards", questions, detected_count: questions.length, page_images: [image], header_logo: "", suggested_title: name,
+    warnings: ["막대그래프 그리기를 빈도수 숫자 응답으로 바꿨습니다. 정답과 배점을 입력해 주세요.",
+      ...(task.copies > 1 ? [`같은 시험지 ${task.copies}부 중 한 부만 가져왔습니다.`] : []),
+      ...(svgs.length > 1 ? ["그래프 뒤에 있는 교사용 듣기 지문 페이지는 학생 시험지에서 제외했습니다."] : [])] };
 }
 
 async function parseHwpFile(file, forcePageMode) {
@@ -1055,18 +1665,22 @@ async function parseHwpFile(file, forcePageMode) {
 
     const fallbackName = file.name.replace(/\.[^.]+$/, "");
     let parsedCards = null;
+    let graphTask = null;
 
-    if (!forcePageMode) {
+    {
       try {
         const hwpxBytes = doc.exportHwpx();
         const hwpxFile = new File([hwpxBytes], file.name.replace(/\.hwp$/i, ".hwpx"), { type: "application/hwp+zip" });
         const cand = await parseHwpxFile(hwpxFile);
+        graphTask = cand.graph_task;
         const svgHasImages = svgs.some((s) => s && s.includes("<image"));
         const candHasImages = cand.questions.some((q) => q.images && q.images.length) || Boolean(cand.header_logo);
-        if (cand.questions.length > 1 && (!svgHasImages || candHasImages)) {
+        if (cand.detected_count > 0 && (!svgHasImages || candHasImages)) {
           parsedCards = cand;
         }
       } catch (_) {}
+
+      if (graphTask) return await parseFrequencyGraph(graphTask, svgs, fallbackName, forcePageMode);
 
       if (!parsedCards) {
         const blocks = [];
@@ -1106,14 +1720,16 @@ async function parseHwpFile(file, forcePageMode) {
           }
         }
 
-        const { questions, docTitle, headerLogo } = splitBlocksToQuestions(blocks);
-        if (questions.length > 1) {
+        const { questions, docTitle, headerLogo, detected_count } = splitBlocksToQuestions(blocks);
+        if (detected_count > 0) {
           parsedCards = {
             mode: "cards",
             page_images: pageImages,
             questions,
             suggested_title: docTitle || fallbackName,
             header_logo: headerLogo,
+            detected_count,
+            warnings: questionParseWarnings(questions),
           };
         }
       }
@@ -1122,6 +1738,7 @@ async function parseHwpFile(file, forcePageMode) {
     if (parsedCards) {
       return {
         ...parsedCards,
+        mode: forcePageMode ? "omr_pages" : "cards",
         page_images: pageImages,
       };
     }
@@ -1132,21 +1749,23 @@ async function parseHwpFile(file, forcePageMode) {
       const pageTxt = cleanText(parseRhwpJsonText(doc.getPageText(p)));
       if (pageTxt) allBlocks.push({ type: "text", text: pageTxt });
     }
-    const { questions, docTitle, headerLogo } = splitBlocksToQuestions(allBlocks);
-    const cnt = questions.length > 1 ? Math.max(5, questions.length) : 10;
-    const omrQs = [];
-    for (let i = 1; i <= cnt; i++) {
-      omrQs.push({
-        num: i, type: "choice", multi: false, prompt: `${i}번 문항`,
-        passage: "", choices: ["①", "②", "③", "④", "⑤"], images: [], answer: "1", points: 1, explain: ""
-      });
-    }
+    const { questions, docTitle, headerLogo, detected_count } = splitBlocksToQuestions(allBlocks);
+    if (!pageImages.length) throw new Error("HWP 본문과 페이지를 읽지 못했습니다. 한글에서 HWPX 또는 PDF로 저장한 뒤 다시 올려 주세요.");
+    // Keep the detected numbers/types/count instead of silently inventing 5 or 10 questions.
+    const omrQs = detected_count ? questions : [{
+      num: 1, type: "choice", multi: false, prompt: "문항 수와 보기를 원본에 맞게 편집해 주세요.",
+      passage: "", choices: ["①", "②", "③", "④", "⑤"], images: [], answer: "1", points: 1, explain: ""
+    }];
     return {
       mode: "omr_pages",
       page_images: pageImages,
       questions: omrQs,
       suggested_title: docTitle || fallbackName,
       header_logo: headerLogo,
+      detected_count,
+      warnings: detected_count
+        ? questionParseWarnings(questions)
+        : ["문항 번호를 자동 인식하지 못해 원본 페이지를 표시합니다. 임시 문항 1개를 만들었으니 문항 수·보기·정답을 직접 편집해 주세요."],
     };
   } finally {
     try { doc.free(); } catch (_) {}
@@ -1169,6 +1788,7 @@ async function handleFiles(fileList) {
     } else if (ext === "hwpx") {
       setLoadingProgress(35, "한글(.hwpx) 문항·그림을 추출하고 있습니다...");
       parsed = await parseHwpxFile(first);
+      if (parsed.graph_task) parsed = await parseHwpFile(first, document.getElementById("forcePageMode").checked);
     } else if (ext === "pdf") {
       parsed = await parsePdfFile(first, document.getElementById("forcePageMode").checked);
     } else if (["png", "jpg", "jpeg", "webp"].includes(ext)) {
@@ -1195,7 +1815,10 @@ async function handleFiles(fileList) {
     }
 
     setLoadingProgress(100, "분석 완료!");
-    status.textContent = `분석 완료! ${parsed.questions.length}개 문항을 확인한 뒤 저장하세요.`;
+    const warnings = parsed.warnings || [];
+    status.textContent = warnings.length
+      ? `확인 필요: ${warnings.join(" ")}`
+      : `분석 완료! ${parsed.questions.length}개 문항을 확인한 뒤 저장하세요.`;
     openEditor({
       id: null,
       title: parsed.suggested_title,
@@ -1205,7 +1828,8 @@ async function handleFiles(fileList) {
       questions: parsed.questions,
       show_score_to_student: true,
       is_open: true,
-    });
+    }, parsed.variants || []);
+    if (warnings.length) alert(warnings.join("\n"));
   } catch (err) {
     status.textContent = "";
     alert("파일 분석 중 오류가 발생했습니다: " + err.message);
@@ -1224,6 +1848,8 @@ fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileI
 
 /* ======================== EXAM LIST & EDITOR ======================== */
 let currentExam = null;
+let importedVariantDrafts = [];
+let selectedImportVariant = 0;
 
 async function loadExams() {
   const list = document.getElementById("examList");
@@ -1276,7 +1902,11 @@ function syncPinInputUi() {
 }
 document.getElementById("edUsePin").addEventListener("change", syncPinInputUi);
 
-function openEditor(exam) {
+function openEditor(exam, variants = []) {
+  importedVariantDrafts = JSON.parse(JSON.stringify(variants));
+  selectedImportVariant = 0;
+  document.getElementById("importVariantWrap").style.display = variants.length > 1 ? "flex" : "none";
+  document.getElementById("importVariantSelect").innerHTML = variants.map((v,i)=>`<option value="${i}">${escapeHtml(v.label || v.title)}</option>`).join("");
   currentExam = JSON.parse(JSON.stringify(exam));
   document.getElementById("edTitle").value = currentExam.title || "";
   document.getElementById("edMode").value = currentExam.mode || "cards";
@@ -1309,6 +1939,21 @@ function openEditor(exam) {
   renderEditorQuestions();
   document.getElementById("editorSection").classList.add("show");
   document.getElementById("editorSection").scrollIntoView({ behavior: "smooth" });
+}
+
+function selectImportVariant(value) {
+  const index = Number(value);
+  if (!Number.isInteger(index) || !importedVariantDrafts[index] || !currentExam) return;
+  const previous = importedVariantDrafts[selectedImportVariant];
+  previous.questions = JSON.parse(JSON.stringify(currentExam.questions));
+  previous.title = document.getElementById("edTitle").value;
+  const next = importedVariantDrafts[index];
+  currentExam.questions = JSON.parse(JSON.stringify(next.questions));
+  currentExam.title = next.title;
+  document.getElementById("edTitle").value = next.title;
+  document.getElementById("fastAnswersInput").value = "";
+  selectedImportVariant = index;
+  renderEditorQuestions();
 }
 
 function renderEditorQuestions() {
