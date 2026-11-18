@@ -150,6 +150,20 @@
   .source-image-stage { flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:12px; }
   .source-image-stage img { display:block;max-width:none;height:auto;margin:0 auto;background:white; }
   #sourceQuestionOptions[hidden] { display:none; }
+  .question-edit-layout { display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,1fr);gap:18px;margin-top:14px;align-items:start; }
+  .question-edit-panel { min-width:0;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fff; }
+  .question-edit-panel h3 { margin:0 0 12px;color:var(--navy);font-size:1rem; }
+  .question-edit-panel h4 { margin:16px 0 8px;font-size:.92rem; }
+  .question-edit-help { color:var(--muted);font-size:.83rem;line-height:1.7;margin:6px 0 12px; }
+  .question-type-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
+  .question-type-option { display:flex;align-items:start;gap:8px;padding:10px;border:1.5px solid var(--border);border-radius:9px;cursor:pointer; }
+  .question-type-option:has(input:checked) { border-color:var(--blue);background:#eff6ff; }
+  .question-type-option small { display:block;color:var(--muted);font-size:.76rem;margin-top:3px; }
+  .teacher-review-toggle { display:block;padding:10px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin:10px 0;font-weight:600;font-size:.88rem; }
+  .response-edit-row { border:1px solid var(--border);border-radius:9px;margin:12px 0;padding:12px; }
+  .response-edit-row label { display:block;font-size:.83rem;margin:6px 0; }
+  .response-edit-row label input:not([type=checkbox]),.response-edit-row textarea { max-width:100%; }
+  @media(max-width:950px) { .question-edit-layout {grid-template-columns:minmax(0,1fr);} }
   .answer-ready { color:var(--green);font-size:0.78rem; }
   .answer-missing { color:#b45309;font-size:0.78rem; }
   @media(max-width:700px) { .answer-row {padding:12px;} .answer-checkbox {padding:9px;min-height:44px;} }
@@ -444,7 +458,7 @@
     <div style="display:flex;gap:8px;align-items:center;margin:8px 0;"><span>선택 화면</span><button type="button" class="btn btn-light btn-sm" onclick="setCropDisplayZoom(cropDisplayZoom-25)">−</button><output id="cropDisplayScale">100%</output><button type="button" class="btn btn-light btn-sm" onclick="setCropDisplayZoom(cropDisplayZoom+25)">＋</button><button type="button" class="btn btn-light btn-sm" onclick="setCropDisplayZoom(100)">화면 맞춤</button></div>
     <div id="sourceQuestionOptions" hidden style="margin:10px 0;padding:10px;background:#eff6ff;border-radius:8px;">
       <div id="sourceNewQuestionFields" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-        <label>문제 유형 <select id="sourceQuestionType"><option value="choice">객관식</option><option value="short">단답형</option><option value="sentence">문장형 · 교사 검토</option><option value="ox">OX</option><option value="matching">연결</option><option value="blanks">여러 답칸·꼬리문제</option></select></label>
+        <label>문제 유형 <select id="sourceQuestionType"><option value="choice">객관식</option><option value="short">주관식</option><option value="ox">OX</option><option value="matching">연결</option><option value="blanks">여러 답칸·꼬리문제</option></select></label><label><input type="checkbox" id="sourceTeacherReview" /> 주관식은 교사 확인 후 채점</label>
         <label>보기 개수 <input type="number" id="sourceChoiceCount" min="2" max="10" value="5" style="width:60px;" /></label>
         <label>답칸 수 <input type="number" id="sourceResponseCount" min="1" max="30" value="1" style="width:60px;" /></label>
       </div>
@@ -755,7 +769,7 @@ function extractTailQuestions(text,parentNum) {
     }
     const rows=content.split("\n"),letters=rows.flatMap(extractLetterChoices);
     if(letters.length>=2){const first=rows.findIndex((line)=>extractLetterChoices(line).length);return {label:marker.label,text:rows.slice(0,first).join("\n"),type:"choice",choices:letters.map((c)=>c.text),choice_labels:letters.map((c)=>c.label)};}
-    return {label:marker.label,text:content,type:/문장.{0,20}(?:쓰|완성)|문장으로|이유.*설명|write.{0,20}sentence|explain\s+why/i.test(instruction)?"sentence":"short"};
+    return {label:marker.label,text:content,type:"short"};
   });
   return {stem,items};
 }
@@ -840,6 +854,9 @@ function prepareQuestion(q, infer = false) {
       return key ? q.choices[key==="O"?0:1] : value;
     }));
     q.partial_credit = Boolean(q.partial_credit);
+  }
+  if(q.type==="short" || q.type==="sentence" || (q.type==="blanks" && q.response_items.some((item)=>!item.choices?.length))) {
+    q.text_grading={ignore_spaces:false,ignore_case:false,allow_typos:false,max_typos:1,normalized_credit:100,typo_credit:50,...(q.text_grading || {})};
   }
   if(infer){q.recognition=worksheetTaskProfile(q);if(q.recognition.review_reason)q.recognition_review_reason=q.recognition.review_reason;}
   return q;
@@ -3100,13 +3117,28 @@ function compactAnswerInputs(q,idx) {
 }
 const imageCropHistory=new WeakMap();
 const questionRegionHistory=new WeakMap();
+const questionImageDeleteHistory=new WeakMap();
+function deleteQuestionImage(idx,imageIdx) {
+  const q=currentExam?.questions[idx];if(!q?.images || !Number.isInteger(imageIdx) || imageIdx<0 || imageIdx>=q.images.length)return;
+  const entry={index:imageIdx,url:q.images[imageIdx]};
+  if(q.source_regions?.length===q.images.length){entry.region=q.source_regions[imageIdx];q.source_regions.splice(imageIdx,1);}
+  if(!questionImageDeleteHistory.has(q))questionImageDeleteHistory.set(q,[]);
+  questionImageDeleteHistory.get(q).push(entry);q.images.splice(imageIdx,1);renderEditorQuestions();
+}
+function undoDeletedQuestionImage(idx) {
+  const q=currentExam?.questions[idx],entry=q && questionImageDeleteHistory.get(q)?.pop();if(!entry)return;
+  const index=Math.min(entry.index,q.images.length);
+  if(entry.region && q.source_regions?.length===q.images.length)q.source_regions.splice(index,0,entry.region);
+  q.images.splice(index,0,entry.url);renderEditorQuestions();
+}
 function questionImagesHtml(q,idx) {
-  if(!q.images?.length)return "";
-  return `<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<div><img src="${escapeHtml(url)}" alt="${q.num}번 문제 이미지 ${i+1}" loading="lazy" data-zoomable tabindex="0" role="button" aria-label="${q.num}번 이미지 ${i+1} 확대" /><div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;"><button type="button" class="btn btn-light btn-sm" onclick="openImageCropModal(${idx},${i})">✂️ 이미지 ${i+1} 자르기</button>${imageCropHistory.get(q)?.has(url)?`<button type="button" class="btn btn-light btn-sm" onclick="undoQuestionImageCrop(${idx},${i})">자르기 되돌리기</button>`:""}</div></div>`).join("")}</div>`;
+  const undo=questionImageDeleteHistory.get(q)?.length?`<button type="button" class="btn btn-light btn-sm" onclick="undoDeletedQuestionImage(${idx})">이미지 삭제 되돌리기</button>`:"";
+  if(!q.images?.length)return undo;
+  return `<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<div><img src="${escapeHtml(url)}" alt="${q.num}번 문제 이미지 ${i+1}" loading="lazy" data-zoomable tabindex="0" role="button" aria-label="${q.num}번 이미지 ${i+1} 확대" /><div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;"><button type="button" class="btn btn-light btn-sm" onclick="openImageCropModal(${idx},${i})">✂️ 이미지 ${i+1} 자르기</button><button type="button" class="btn btn-light btn-sm" onclick="deleteQuestionImage(${idx},${i})">이미지 ${i+1} 삭제</button>${imageCropHistory.get(q)?.has(url)?`<button type="button" class="btn btn-light btn-sm" onclick="undoQuestionImageCrop(${idx},${i})">자르기 되돌리기</button>`:""}</div></div>`).join("")}${undo}</div>`;
 }
 function renderCompactAnswerTable(list) {
   const all=document.getElementById("showCompletedAnswers").checked;
-  const types={choice:"객관식",short:"단답",sentence:"문장형 · 교사 검토",ox:"OX / T·F",matching:"연결",blanks:"빈칸"};
+  const types={choice:"객관식",short:"주관식",sentence:"주관식 · 교사 확인",ox:"OX / T·F",matching:"연결",blanks:"여러 답칸·꼬리문제"};
   if(currentExam.page_images?.length && (currentExam.mode==="omr_pages" || currentExam.questions.some((q)=>!q.images?.length && !questionContent(q).trim()))) {
     const pages=document.createElement("div");pages.className="answer-question-images original";
     pages.innerHTML=`<strong>시험지 원본</strong>${currentExam.page_images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="시험지 ${i+1}페이지" loading="lazy" data-zoomable tabindex="0" role="button" />`).join("")}`;
@@ -3123,7 +3155,7 @@ function renderCompactAnswerTable(list) {
       ${questionReviewReasons(q).length?`<div style="color:var(--red);font-size:0.85rem;">${questionReviewReasons(q).map(escapeHtml).join(" · ")}</div>`:""}
       <div class="answer-controls"><button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder(${idx})">원본에서 문제 영역 다시 선택</button>${questionRegionHistory.get(q)?.length?`<button type="button" class="btn btn-light btn-sm" onclick="undoSourceQuestionRegions(${idx})">영역 교체 되돌리기</button>`:""}</div>
       <div class="answer-controls"><strong>정답 지정</strong>${q.type==="choice"?`<label><input type="checkbox" id="answer-multi-compact-${idx}" ${q.multi?"checked":""} onchange="setCheckboxMulti(${idx},this.checked)" /> 복수 정답</label>`:""}</div>
-      <div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div>`;
+      <div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div>${gradingSettingsHtml(q,idx)}`;
     list.appendChild(row);
   });
   if(!count)list.innerHTML='<div style="padding:20px;color:var(--green);">정답 입력 완료! 전체 정답을 확인하려면 ‘완료한 정답도 보기’를 선택하세요.</div>';
@@ -3143,7 +3175,7 @@ function responseEditorHtml(q, idx) {
       : (item.choices || []).map((c)=>[c,c]);
     const answer = options.length ? answerCheckboxesHtml(q,idx,ri,"editor")
       : `<input value="${escapeHtml(values[ri] || "")}" placeholder="이 칸의 정답 (다른 표현은 |로 구분)" onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:180px;" />`;
-    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center;"><input value="${escapeHtml(item.label)}" aria-label="답칸 이름" onchange="currentExam.questions[${idx}].response_items[${ri}].label=this.value" style="width:105px;" />${q.type==="blanks"?`<select aria-label="소문항 유형" onchange="setResponseItemType(${idx},${ri},this.value)">${[["sentence","문장형 · 검토"],["short","직접 입력"],["choice","객관식"],["ox","OX / T·F"]].map(([v,t])=>`<option value="${v}" ${(item.type || (item.choices?.length?"choice":"short"))===v?"selected":""}>${t}</option>`).join("")}</select>`:""}${answer}${q.type === "blanks" ? `<input value="${escapeHtml((item.choices || []).join(" | "))}" placeholder="선택지 (|로 구분, 비우면 직접 입력)" onchange="setBlankOptions(${idx},${ri},this.value)" style="flex:1;min-width:200px;" /><textarea rows="2" placeholder="꼬리문제 내용 (텍스트 문항에서 표시)" onchange="currentExam.questions[${idx}].response_items[${ri}].text=this.value" style="width:100%;">${escapeHtml(item.text || "")}</textarea>` : ""}</div>`;
+    return `<fieldset class="response-edit-row"><legend>답칸 ${ri+1}</legend><label>답칸 이름 <input value="${escapeHtml(item.label)}" onchange="currentExam.questions[${idx}].response_items[${ri}].label=this.value" style="width:105px;" /></label>${q.type==="blanks"?`<label>입력 방식 <select aria-label="소문항 유형" onchange="setResponseItemType(${idx},${ri},this.value)">${[["short","주관식 · 직접 입력"],["choice","객관식"],["ox","OX / T·F"]].map(([v,t])=>`<option value="${v}" ${((item.type==="sentence"?"short":item.type) || (item.choices?.length?"choice":"short"))===v?"selected":""}>${t}</option>`).join("")}</select></label>`:""}<strong style="display:block;font-size:.84rem;margin:8px 0;">${item.type==="sentence"?"참고 답안 (선택)":"정답"}</strong>${answer}${q.type==="blanks" && !options.length?`<label class="teacher-review-toggle"><input type="checkbox" ${item.type==="sentence"?"checked":""} onchange="setTeacherReview(${idx},this.checked,${ri})" /> 이 답칸은 교사 확인 후 채점</label>`:""}${q.type === "blanks" ? `${options.length?`<label>선택지 내용 <input value="${escapeHtml((item.choices || []).join(" | "))}" placeholder="보기 1 | 보기 2" onchange="setBlankOptions(${idx},${ri},this.value)" style="width:100%;" /></label>`:""}<label>꼬리문제 내용 <textarea rows="2" placeholder="텍스트 문항에서 학생에게 보여줄 내용" onchange="currentExam.questions[${idx}].response_items[${ri}].text=this.value" style="width:100%;">${escapeHtml(item.text || "")}</textarea></label>` : ""}</fieldset>`;
   }).join("");
   return `<div style="padding:12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin:10px 0;"><strong>답칸과 정답</strong>
     ${q.type === "ox" ? `<select aria-label="판단 기호" onchange="setJudgmentMode(${idx},this.value)" style="margin-left:8px;"><option value="ox" ${q.choices[0]!=="T"?"selected":""}>○ / ×</option><option value="tf" ${q.choices[0]==="T"?"selected":""}>T / F</option></select>` : ""}
@@ -3210,13 +3242,20 @@ function hasTextResponses(q) {
   return q.type==="short" || q.type==="sentence" || (q.type==="blanks" && (q.response_items || []).some((item)=>!(item.choices || []).length));
 }
 function suggestSentenceQuestions(exam) {
-  (exam.questions || []).forEach((q)=>{
-    if(q.type==="short" && (/문장.{0,35}(?:완성|쓰|배열|고쳐)|(?:완성|배열).{0,25}문장|write\s+(?:a\s+)?sentence|\bwords?\b.{0,35}\border\b|(?:unscramble|rearrange).{0,20}sentence/i.test(q.prompt || "") || String(q.answer || "").split("|")[0].trim().split(/\s+/).length>=5))q.type="sentence";
-  });
+  (exam.questions || []).forEach((q)=>prepareQuestion(q,false));
 }
 function sentenceModeHtml(q,idx) {
-  if(!["short","sentence"].includes(q.type))return "";
-  return `<label style="display:block;margin:10px 0;">채점 방식 <select onchange="setSentenceMode(${idx},this.value)"><option value="short" ${q.type==="short"?"selected":""}>단답형 · 자동 채점</option><option value="sentence" ${q.type==="sentence"?"selected":""}>문장형 · 문법/철자 검사 후 교사 채점</option></select></label>`;
+  if(!hasTextResponses(q))return "";
+  const checked=q.type==="sentence" || q.response_items?.some((item)=>item.type==="sentence");
+  return `<label class="teacher-review-toggle"><input type="checkbox" ${checked?"checked":""} onchange="setTeacherReview(${idx},this.checked)" /> 교사 확인 후 채점</label><div class="question-edit-help">기본은 입력한 정답으로 자동 채점합니다. 체크하면 자동 채점을 보류하고 교사가 점수를 확정합니다.</div>`;
+}
+function setTeacherReview(idx,checked,row=null) {
+  const q=currentExam.questions[idx];if(!q || !hasTextResponses(q))return;
+  if(["short","sentence"].includes(q.type))q.type=checked?"sentence":"short";
+  else q.response_items.forEach((item,i)=>{if((row===null || row===i) && !item.choices?.length && item.type!=="ox")item.type=checked?"sentence":"short";});
+  prepareQuestion(q,false);
+  renderEditorQuestions();
+  if(document.getElementById("previewModal").classList.contains("show"))renderPreviewModal(null);
 }
 function setSentenceMode(idx,type) {
   if(!["short","sentence"].includes(type))return;
@@ -3224,7 +3263,7 @@ function setSentenceMode(idx,type) {
   if(document.getElementById("previewModal").classList.contains("show"))renderPreviewModal(null);else renderEditorQuestions();
 }
 function textGradingDefaults(q) {
-  return {ignore_spaces:false,ignore_case:true,allow_typos:false,max_typos:1,normalized_credit:100,typo_credit:50,...(q.text_grading || {})};
+  return {ignore_spaces:false,ignore_case:false,allow_typos:false,max_typos:1,normalized_credit:100,typo_credit:50,...(q.text_grading || {})};
 }
 function setTextGrading(idx,key,value) {
   const q=currentExam.questions[idx];if(!q || !hasTextResponses(q))return;
@@ -3242,7 +3281,7 @@ function applyTextGradingAll(idx) {
 }
 function gradingSettingsHtml(q,idx) {
   if(!hasTextResponses(q))return "";
-  if(q.type==="sentence" || q.response_items?.some((item)=>item.type==="sentence"))return `${sentenceModeHtml(q,idx)}<div style="padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">문장형 또는 문장형 꼬리문제가 포함된 문항은 전체 채점을 보류합니다. 문장형 참고 답안은 선택 사항입니다. 제출 후 결과 화면에서 영어 기본 문법·철자 확인 항목을 보고 교사가 문항 점수를 확정합니다. 검사 결과로 점수를 자동 결정하지 않습니다.</div>`;
+  if(q.type==="sentence" || q.response_items?.some((item)=>item.type==="sentence"))return `${sentenceModeHtml(q,idx)}<div class="question-edit-help" style="padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">교사 확인을 선택해 이 문항의 채점을 보류합니다. 참고 답안은 선택 사항입니다. 꼬리문제 하나라도 교사 확인으로 설정하면 문항 전체를 검토합니다. 제출 후 영어 문법·철자 확인 항목을 참고해 교사가 점수를 확정하세요.</div>`;
   const p=textGradingDefaults(q);q.text_grading={...p};
   return `${sentenceModeHtml(q,idx)}<details style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;background:#f8fafc;"><summary style="cursor:pointer;font-weight:700;">주관식 채점 설정</summary>
     <div style="display:flex;flex-wrap:wrap;gap:14px;margin:12px 0;">
@@ -3294,6 +3333,9 @@ function updatePreviewAnswerSummary() {
   const el=document.getElementById("pvAnswerSummary");if(!el || !currentExam)return;
   const state=examReadiness(currentExam);el.textContent=`교사용 정답 입력 · ${state.answered}/${state.total}문항 완료 · 입력한 내용은 시험지 초안의 정답으로 반영됩니다.`;
 }
+function questionTypeOptionsHtml(q,idx) {
+  return `<div class="question-type-grid" role="group" aria-label="문제 유형">${[["choice","객관식","보기 중 정답 선택"],["short","주관식","단어·수·문장을 직접 입력"],["ox","OX / T·F","참·거짓 판단"],["matching","연결·짝짓기","각 항목에 맞는 보기 선택"],["blanks","여러 답칸·꼬리문제","한 문제에 여러 답을 입력"]].map(([type,label,help])=>`<label class="question-type-option"><input type="radio" name="question-type-${idx}" value="${type}" ${(q.type==="sentence"?"short":q.type)===type?"checked":""} onchange="changeQType(${idx},this.value)" /><span><strong>${label}</strong><small>${help}</small></span></label>`).join("")}</div>`;
+}
 function renderEditorQuestions() {
   const list = document.getElementById("questionsEditorList");
   list.innerHTML = "";
@@ -3311,7 +3353,7 @@ function renderEditorQuestions() {
     const structured = isStructuredQuestion(q);
     const choiceBtns = isChoice
       ? answerCheckboxesHtml(q,idx,null,"editor")
-      : structured ? `<span style="font-size:0.82rem;">아래 답칸별로 설정</span>` : `<input type="text" value="${escapeHtml(q.answer || "")}" placeholder="정답 (유사 답안은 | 로 구분)" onchange="setQAnswer(${idx}, this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;min-width:210px;" />`;
+      : structured ? `<span style="font-size:0.82rem;">아래에서 각 답칸의 정답을 입력하세요.</span>` : `<input type="text" value="${escapeHtml(q.answer || "")}" placeholder="정확한 정답 (다른 인정 답안은 |로 구분)" onchange="setQAnswer(${idx}, this.value)" style="width:100%;padding:9px;border:1px solid var(--border);border-radius:7px;" />`;
     const multiToggle = isChoice
       ? `<label style="font-size:0.8rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
            <input type="checkbox" id="answer-multi-editor-${idx}" ${q.multi ? "checked" : ""} onchange="setCheckboxMulti(${idx},this.checked)" /> 복수정답
@@ -3326,9 +3368,7 @@ function renderEditorQuestions() {
           <button type="button" class="btn btn-light btn-sm" onclick="removeChoice(${idx})">- 마지막 보기 삭제</button>
         </div>`
       : "";
-    const imgsHtml = (q.images && q.images.length)
-      ? `${questionImagesHtml(q,idx)}<div style="display:flex;gap:6px;flex-wrap:wrap;">${q.images.map((_,ii)=>`<button type="button" class="btn btn-light btn-sm" onclick="removeImage(${idx},${ii})">이미지 ${ii+1} 삭제</button>`).join("")}</div>`
-      : "";
+    const imgsHtml = questionImagesHtml(q,idx);
     const hasPages = Boolean(currentExam.page_images && currentExam.page_images.length);
     const cropBtnHtml = hasPages
       ? `<button type="button" class="btn btn-light btn-sm" onclick="openCropModal(${idx})">✂️ 원문에서 오려 넣기</button><button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder(${idx})">원본에서 문제 영역 다시 선택</button>${questionRegionHistory.get(q)?.length?`<button type="button" class="btn btn-light btn-sm" onclick="undoSourceQuestionRegions(${idx})">영역 교체 되돌리기</button>`:""}`
@@ -3337,40 +3377,35 @@ function renderEditorQuestions() {
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 8px;">
         <label class="btn btn-light btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">🖼️ 그림 파일 추가<input type="file" accept="image/*" multiple style="display:none;" onchange="addImagesFromFiles(${idx}, this)" /></label>
         <button type="button" class="btn btn-light btn-sm" onclick="pasteImageFromClipboard(${idx})">📋 클립보드 붙여넣기</button>
-        ${cropBtnHtml}
         <input type="text" readonly placeholder="여기를 클릭하고 Ctrl+V로 캡처 그림 붙여넣기" onpaste="handleImagePaste(${idx}, event)" style="flex:1;min-width:210px;padding:5px 9px;font-size:0.8rem;border:1px dashed var(--border);border-radius:7px;background:#f8fafc;color:var(--muted);cursor:text;" />
       </div>`;
 
     card.innerHTML = `
       ${focusedQuestionNum!==null?`<button type="button" class="btn btn-light btn-sm" style="margin-bottom:10px;" onclick="setEditorView('answers')">← 정답표로 돌아가기</button>`:""}
-      <div class="q-edit-top">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <strong style="color:var(--navy);font-size:1rem;">${q.num}번</strong>
-          <select onchange="changeQType(${idx}, this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:7px;">
-            ${[["choice","객관식"],["short","단답형"],["sentence","문장형 · 교사 검토"],["ox","OX / T·F"],["matching","연결·짝짓기"],["blanks","여러 빈칸·소문항"]].map(([value,label])=>`<option value="${value}" ${q.type===value?"selected":""}>${label}</option>`).join("")}
-          </select>
-          <label style="font-size:0.82rem;color:var(--muted);">배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=parseFloat(this.value)||1" style="width:58px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;" /></label>
-          ${multiToggle}
-        </div>
-        <div class="ans-pills">
-          <span style="font-size:0.82rem;font-weight:700;color:var(--green);">정답:</span>
-          ${choiceBtns}
-          <button type="button" class="btn btn-red btn-sm" onclick="deleteQuestion(${idx})">삭제</button>
-        </div>
-      </div>
-      ${q.content_mode==="image"?`<div style="margin:8px 0;color:var(--muted);">학생에게는 아래 원본 이미지와 답안 입력란만 표시됩니다.</div>`:""}
+      <strong style="color:var(--navy);font-size:1.15rem;">${q.num}번 문제 수정</strong>
+      <div class="question-edit-layout">
+      <section class="question-edit-panel"><h3>1. 문제 내용·이미지</h3>
+      <p class="question-edit-help">${q.content_mode==="image"?"학생에게 보이는 원본 문제입니다. 클릭하면 확대되고, 자르기·삭제·영역 다시 선택으로 내용을 바꿀 수 있습니다.":"질문과 지문을 아래에 입력하고 필요한 그림을 추가하세요."}</p>
       ${q.image_review_reason?`<div style="color:var(--red);margin:8px 0;">${escapeHtml(q.image_review_reason)} <button type="button" class="btn btn-light btn-sm" onclick="delete currentExam.questions[${idx}].image_review_reason;renderEditorQuestions()">이미지 확인 완료</button></div>`:""}
-      ${q.recognition?`<div style="font-size:0.85rem;color:var(--muted);margin:8px 0;">문제 분류: ${escapeHtml(q.recognition.label)}</div>`:""}
       ${q.recognition_review_reason?`<div style="color:var(--red);margin:8px 0;">${escapeHtml(q.recognition_review_reason)} <button type="button" class="btn btn-light btn-sm" onclick="delete currentExam.questions[${idx}].recognition_review_reason;renderEditorQuestions()">유형·답칸 확인 완료</button></div>`:""}
-      ${imageQuestion(q)?"<details><summary>분석용 텍스트 보기·수정</summary>":""}
+      ${q.content_mode==="image"?"<details><summary>인식한 텍스트 확인 (선택)</summary>":""}
       <div class="field"><label>${q.content_mode==="image"?"분석용 텍스트 (학생에게 표시되지 않음)":"문제 내용 (질문·지문·보기 설명)"}</label><textarea rows="6" placeholder="질문, 지문, 보기 설명을 순서대로 적으세요." onchange="currentExam.questions[${idx}].prompt=this.value;updateReviewSummary()">${escapeHtml(q.prompt || "")}</textarea></div>
-      ${imageQuestion(q)?"</details>":""}
+      ${q.content_mode==="image"?"</details>":""}
       ${imgsHtml}
-      ${imgToolsHtml}
-      ${choicesHtml}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">${cropBtnHtml || `<button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder(${idx})">원본에서 문제 영역 다시 선택</button>`}</div>
+      <details><summary style="cursor:pointer;">이미지 추가·캡처 붙여넣기</summary>${imgToolsHtml}</details>
+      </section>
+      <section class="question-edit-panel"><h3>2. 답안 방식·채점</h3>
+      ${questionTypeOptionsHtml(q,idx)}
+      <p class="question-edit-help">학생이 답을 입력하는 방식을 고르세요. 유형을 바꾼 뒤 정답과 답칸을 확인해 주세요.</p>
+      <h4>정답과 배점</h4><label style="display:block;margin:10px 0;">이 문제 배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=parseFloat(this.value)||1" style="width:70px;" /> 점</label>
+      ${multiToggle}<div class="answer-controls">${choiceBtns}</div>
       ${structured ? responseEditorHtml(q,idx) : ""}
       ${gradingSettingsHtml(q,idx)}
-      <div class="field" style="margin-top:8px;margin-bottom:0;"><input type="text" value="${escapeHtml(q.explain || "")}" placeholder="해설 (선택)" onchange="currentExam.questions[${idx}].explain=this.value" style="font-size:0.85rem;" /></div>
+      ${choicesHtml?`<details style="margin-top:14px;" ${imageQuestion(q)?"":"open"}><summary style="cursor:pointer;">보기 내용·기호 편집</summary><p class="question-edit-help">원본에 인쇄된 보기 순서와 기호에 맞춰 설정하세요.</p>${choicesHtml}</details>`:""}
+      <details style="margin-top:14px;"><summary style="cursor:pointer;">해설 (선택)</summary><div class="field" style="margin-top:8px;margin-bottom:0;"><textarea rows="3" placeholder="해설 입력" onchange="currentExam.questions[${idx}].explain=this.value">${escapeHtml(q.explain || "")}</textarea></div></details>
+      </section></div>
+      <div style="display:flex;justify-content:space-between;margin-top:16px;gap:8px;"><button type="button" class="btn btn-primary btn-sm" onclick="setEditorView('answers')">수정 완료 · 정답표로</button><button type="button" class="btn btn-red btn-sm" onclick="deleteQuestion(${idx})">이 문항 삭제</button></div>
     `;
     card.addEventListener("paste", (e) => {
       const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
@@ -3437,8 +3472,7 @@ function removeChoice(idx) {
   renderEditorQuestions();
 }
 function removeImage(qIdx, imgIdx) {
-  currentExam.questions[qIdx].images.splice(imgIdx, 1);
-  renderEditorQuestions();
+  deleteQuestionImage(qIdx,imgIdx);
 }
 async function appendImageSourceToQuestion(qIdx, blobOrDataUrl) {
   const q = currentExam.questions[qIdx];
@@ -3570,6 +3604,7 @@ function openSourceQuestionBuilder(qIdx=null,pageIdx=0) {
   sourceBuilderExam=currentExam;sourceBuilderQuestions=currentExam.questions;sourceBuilderPages=currentExam.page_images;sourceBuilderRegions=[];
   document.getElementById("sourceQuestionOptions").hidden=false;
   document.getElementById("sourceNewQuestionFields").style.display=qIdx===null?"flex":"none";
+  if(qIdx===null)document.getElementById("sourceTeacherReview").checked=false;
   document.getElementById("sourceRegionHelp").textContent=qIdx===null?"유형을 정하고 문제 전체를 선택하세요. 떨어진 지문·그림·보기는 ‘선택 영역 담기’로 순서대로 묶을 수 있습니다.":"선택한 영역으로 기존 문제 이미지 전체를 교체합니다. 정답·문제 유형·배점은 유지합니다. 떨어진 내용은 여러 영역으로 담을 수 있습니다.";
   document.getElementById("cropTitle").textContent=qIdx===null?"원본 영역으로 새 문항 만들기":"원본에서 문제 영역 다시 선택";
   document.getElementById("cropTargetLabel").textContent=qIdx===null?"":`(${cropTargetQuestion.num}번)`;
@@ -3588,13 +3623,15 @@ function applySourceQuestionRegions() {
     if(!entries.length)throw new Error("문제 영역을 먼저 선택해 주세요.");
     let q=existing;
     if(cropMode==="new-question") {
-      const type=document.getElementById("sourceQuestionType").value;
+      const selectedType=document.getElementById("sourceQuestionType").value;
+      const manual=document.getElementById("sourceTeacherReview").checked;
+      const type=selectedType==="short" && manual?"sentence":selectedType;
       if(!["choice","short","sentence","ox","matching","blanks"].includes(type))throw new Error("문제 유형을 선택해 주세요.");
       const count=Math.max(2,Math.min(10,Math.round(Number(document.getElementById("sourceChoiceCount").value)||5)));
       const slots=Math.max(1,Math.min(30,Math.round(Number(document.getElementById("sourceResponseCount").value)||1)));
       const num=Math.max(0,...currentExam.questions.map((item)=>Number(item.num)||0))+1;
       q={num,type,prompt:"원본에서 선택한 문제",passage:"",answer:"",points:1,multi:false,explain:"",images:[],content_mode:"image",source_label:String(num),choices:type==="ox"?["O","X"]:["choice","matching"].includes(type)?Array.from({length:count},(_,i)=>CIRCLED[i] || String(i+1)):[]};
-      if(["ox","matching","blanks"].includes(type))q.response_items=Array.from({length:slots},(_,i)=>({label:`(${i+1})`,...(type==="blanks"?{type:"short"}:{})}));
+      if(["ox","matching","blanks"].includes(type))q.response_items=Array.from({length:slots},(_,i)=>({label:`(${i+1})`,...(type==="blanks"?{type:manual?"sentence":"short"}:{})}));
       prepareQuestion(q,false);
     } else {
       if(!questionRegionHistory.has(q))questionRegionHistory.set(q,[]);
