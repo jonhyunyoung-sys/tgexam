@@ -269,6 +269,13 @@
   @media (max-width: 640px) {
     .info-grid { grid-template-columns: repeat(3, 1fr); }
   }
+  img[data-zoomable] { cursor:zoom-in; }
+  .source-image-modal { position:fixed;inset:0;z-index:250;background:#0f172ac9;padding:16px;display:flex;flex-direction:column;gap:10px; }
+  .source-image-modal[hidden] { display:none; }
+  .source-image-tools { display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:white;padding:10px;border-radius:10px; }
+  .source-image-tools button { font:inherit;cursor:pointer;border:1px solid #cbd5e1;background:white;border-radius:7px;padding:8px 12px;min-height:40px; }
+  .source-image-stage { flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:12px; }
+  .source-image-stage img { display:block;max-width:none;height:auto;margin:0 auto;background:white; }
 </style>
 </head>
 <body>
@@ -291,6 +298,12 @@
     시험지를 불러오는 중입니다. 잠시만 기다려 주세요...
   </div>
 </main>
+
+<!-- Source image viewer -->
+<div id="sourceImageModal" class="source-image-modal" role="dialog" aria-modal="true" aria-label="원본 이미지 확대" hidden>
+  <div class="source-image-tools"><strong id="sourceImageTitle" style="flex:1;">원본 이미지</strong><button type="button" id="sourceImageMinus" aria-label="이미지 축소">−</button><output id="sourceImageScaleLabel" aria-live="polite">100%</output><button type="button" id="sourceImagePlus" aria-label="이미지 확대">＋</button><button type="button" id="sourceImageFit">화면 맞춤</button><button type="button" id="sourceImageOriginal">원본 크기</button><button type="button" id="sourceImageClose">닫기</button></div>
+  <div id="sourceImageStage" class="source-image-stage"><img id="sourceImageLarge" alt="확대한 원본 이미지" /></div>
+</div>
 
 <script>
 const CIRCLED = ["①", "②", "③", "④", "⑤"];
@@ -869,7 +882,7 @@ function renderQuestions() {
     const pagesCard = document.createElement("section");
     pagesCard.className = "card omr-pages-wrap";
     pagesCard.innerHTML = `<h3 style="margin:0 0 10px;color:var(--navy);">시험지 원문</h3>` +
-      EXAM.page_images.map((u, idx) => `<img src="${u}" alt="시험지 ${idx + 1}쪽" />`).join("");
+      EXAM.page_images.map((u, idx) => `<img data-zoomable tabindex="0" role="button" src="${u}" alt="시험지 ${idx + 1}쪽" />`).join("");
     body.appendChild(pagesCard);
 
     const omrCard = document.createElement("section");
@@ -909,7 +922,7 @@ function renderQuestions() {
     card.className = "card";
     let html = `<div style="font-size:1.02rem;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q._dispNum)}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
     if (q.images && q.images.length) {
-      html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
+      html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
     }
     if (isStructuredQuestion(q)) {
       html += structuredInputsHtml(q);
@@ -973,7 +986,7 @@ async function submitExam(isAuto = false) {
     if(TEACHER_TRIAL){
       examSubmitted=true;closeQuestionNotes();if(timerInterval){clearInterval(timerInterval);timerInterval=null;}
       document.getElementById("submitBar").style.display="none";
-      document.querySelectorAll("button,input,select,textarea").forEach((el)=>{el.disabled=true;});
+      document.querySelectorAll("#mainRoot button,#mainRoot input,#mainRoot select,#mainRoot textarea").forEach((el)=>{el.disabled=true;});
       const banner=document.getElementById("resultBanner"),count=EXAM.questions.filter(questionAnswered).length;
       banner.innerHTML=`<div style="padding:12px;"><strong>체험 제출이 완료되었습니다.</strong><p>${count} / ${EXAM.questions.length}문항에 응답했습니다.</p><p>정답 유무와 관계없이 동작을 확인하는 체험입니다. 점수는 계산하지 않으며 학생 제출 기록·교사용 정답을 변경하지 않습니다. 다시 풀려면 위의 ‘처음부터 다시 풀기’를 누르세요.</p></div>`;
       banner.classList.add("show");window.scrollTo({top:0,behavior:"smooth"});return;
@@ -1010,7 +1023,7 @@ async function submitExam(isAuto = false) {
     closeQuestionNotes();
     if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
     document.getElementById("submitBar").style.display = "none";
-    document.querySelectorAll("button, input, select, textarea").forEach((el) => { el.disabled = true; });
+    document.querySelectorAll("#mainRoot button, #mainRoot input, #mainRoot select, #mainRoot textarea").forEach((el) => { el.disabled = true; });
     const banner = document.getElementById("resultBanner");
 
     const qByNum = {};
@@ -1089,6 +1102,47 @@ async function submitExam(isAuto = false) {
     }
   }
 }
+
+/* Source image enlargement: shared with the student page. */
+let sourceImageZoom=100,sourceImageBaseWidth=0,sourceImageOpener=null;
+function setSourceImageZoom(value) {
+  const amount=Number(value);if(!Number.isFinite(amount))return;
+  sourceImageZoom=Math.max(25,Math.min(500,Math.round(amount)));
+  const img=document.getElementById("sourceImageLarge");
+  img.style.width=`${Math.max(1,sourceImageBaseWidth*sourceImageZoom/100)}px`;
+  document.getElementById("sourceImageScaleLabel").textContent=`${sourceImageZoom}%`;
+}
+function fitSourceImage() {
+  const img=document.getElementById("sourceImageLarge"),stage=document.getElementById("sourceImageStage");
+  if(!img.naturalWidth || !img.naturalHeight)return;
+  sourceImageBaseWidth=img.naturalWidth*Math.min(1,Math.max(1,stage.clientWidth-24)/img.naturalWidth,Math.max(1,stage.clientHeight-24)/img.naturalHeight);
+  setSourceImageZoom(100);stage.scrollTop=0;stage.scrollLeft=0;
+}
+function openSourceImage(image) {
+  if(!image?.src)return;
+  sourceImageOpener=image;
+  document.getElementById("sourceImageTitle").textContent=image.alt || "원본 이미지";
+  document.getElementById("sourceImageModal").hidden=false;
+  const large=document.getElementById("sourceImageLarge");large.onload=fitSourceImage;large.style.width="";sourceImageZoom=100;sourceImageBaseWidth=0;
+  document.getElementById("sourceImageScaleLabel").textContent="100%";
+  large.src=image.currentSrc || image.src;fitSourceImage();
+  document.getElementById("sourceImageClose").focus?.();
+}
+function closeSourceImage() {
+  document.getElementById("sourceImageModal").hidden=true;
+  const large=document.getElementById("sourceImageLarge");large.onload=null;large.removeAttribute?.("src");
+  sourceImageOpener?.focus?.();sourceImageOpener=null;
+}
+function initSourceImageViewer() {
+  document.addEventListener("click",(event)=>{const img=event.target?.closest?.("img[data-zoomable]");if(img)openSourceImage(img);});
+  document.addEventListener("keydown",(event)=>{
+    if(event.key==="Escape" && !document.getElementById("sourceImageModal").hidden){event.preventDefault();closeSourceImage();}
+    else if((event.key==="Enter" || event.key===" ") && event.target?.matches?.("img[data-zoomable]")){event.preventDefault();openSourceImage(event.target);}
+  });
+  for(const [id,handler] of [["sourceImageClose",closeSourceImage],["sourceImagePlus",()=>setSourceImageZoom(sourceImageZoom+25)],["sourceImageMinus",()=>setSourceImageZoom(sourceImageZoom-25)],["sourceImageFit",fitSourceImage],["sourceImageOriginal",()=>{const img=document.getElementById("sourceImageLarge");if(sourceImageBaseWidth)setSourceImageZoom(img.naturalWidth/sourceImageBaseWidth*100);}]])document.getElementById(id).addEventListener("click",handler);
+}
+initSourceImageViewer();
+
 
 window.addEventListener("message",(event)=>{
   if(!TEACHER_TRIAL || trialInitialized || window.parent===window || event.source!==window.parent || event.origin!==location.origin || event.data?.type!=="qr-exam-trial-start")return;

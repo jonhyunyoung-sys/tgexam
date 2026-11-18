@@ -142,6 +142,14 @@
   .answer-checkbox:has(input:checked) { border-color:var(--blue);background:#eff6ff; }
   .answer-checkbox input[type=checkbox] { width:20px;height:20px;padding:0;margin:0;accent-color:var(--blue);flex-shrink:0; }
   .answer-checkbox span { white-space:pre-wrap;overflow-wrap:anywhere; }
+  img[data-zoomable] { cursor:zoom-in; }
+  .source-image-modal { position:fixed;inset:0;z-index:250;background:#0f172ac9;padding:16px;display:flex;flex-direction:column;gap:10px; }
+  .source-image-modal[hidden] { display:none; }
+  .source-image-tools { display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:white;padding:10px;border-radius:10px; }
+  .source-image-tools button { font:inherit;cursor:pointer;border:1px solid #cbd5e1;background:white;border-radius:7px;padding:8px 12px;min-height:40px; }
+  .source-image-stage { flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:12px; }
+  .source-image-stage img { display:block;max-width:none;height:auto;margin:0 auto;background:white; }
+  #sourceQuestionOptions[hidden] { display:none; }
   .answer-ready { color:var(--green);font-size:0.78rem; }
   .answer-missing { color:#b45309;font-size:0.78rem; }
   @media(max-width:700px) { .answer-row {padding:12px;} .answer-checkbox {padding:9px;min-height:44px;} }
@@ -316,6 +324,11 @@
       <div class="page-preview-strip" id="pagePreviewStrip"></div>
     </div>
 
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;">
+      <button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder()">✂️ 원본에서 새 문항 만들기</button>
+      <label class="btn btn-light btn-sm" style="cursor:pointer;">원본 페이지 불러오기<input type="file" id="sourcePagesInput" accept=".hwp,.hwpx,.pdf,image/*" multiple style="display:none;" onchange="loadEditorSourcePages(this)" /></label>
+      <span style="font-size:.8rem;color:var(--muted);">원본 이미지를 클릭하면 확대할 수 있습니다.</span>
+    </div>
     <div class="fast-answer-bar">
       <strong style="font-size:0.88rem;color:var(--navy);">⚡ 빠른 정답 일괄 입력:</strong>
       <textarea id="fastAnswersInput" rows="2" style="flex:1;min-width:220px;" placeholder="정답을 한꺼번에 붙여넣으세요. 예: 2, O/X, 1/3 또는 번호가 있는 정답지 1. ② 2. ③"></textarea>
@@ -428,6 +441,17 @@
     </div>
     <p id="cropHelp" style="margin:0 0 8px;font-size:0.84rem;color:var(--muted);"></p>
     <div id="cropPageTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin:8px 0;"><span>선택 화면</span><button type="button" class="btn btn-light btn-sm" onclick="setCropDisplayZoom(cropDisplayZoom-25)">−</button><output id="cropDisplayScale">100%</output><button type="button" class="btn btn-light btn-sm" onclick="setCropDisplayZoom(cropDisplayZoom+25)">＋</button><button type="button" class="btn btn-light btn-sm" onclick="setCropDisplayZoom(100)">화면 맞춤</button></div>
+    <div id="sourceQuestionOptions" hidden style="margin:10px 0;padding:10px;background:#eff6ff;border-radius:8px;">
+      <div id="sourceNewQuestionFields" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <label>문제 유형 <select id="sourceQuestionType"><option value="choice">객관식</option><option value="short">단답형</option><option value="sentence">문장형 · 교사 검토</option><option value="ox">OX</option><option value="matching">연결</option><option value="blanks">여러 답칸·꼬리문제</option></select></label>
+        <label>보기 개수 <input type="number" id="sourceChoiceCount" min="2" max="10" value="5" style="width:60px;" /></label>
+        <label>답칸 수 <input type="number" id="sourceResponseCount" min="1" max="30" value="1" style="width:60px;" /></label>
+      </div>
+      <p id="sourceRegionHelp" style="margin:6px 0;font-size:.84rem;"></p>
+      <button type="button" class="btn btn-light btn-sm" id="addSourceRegionBtn">＋ 선택 영역 담기</button>
+      <div id="sourceRegionList" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"></div>
+    </div>
     <div style="background:#f1f5f9;padding:8px;border-radius:10px;text-align:center;max-height:58vh;overflow:auto;">
       <canvas id="cropCanvas" style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:6px;cursor:crosshair;touch-action:none;display:inline-block;"></canvas>
     </div>
@@ -441,6 +465,11 @@
   </div>
 </div>
 
+<!-- Source image viewer -->
+<div id="sourceImageModal" class="source-image-modal" role="dialog" aria-modal="true" aria-label="원본 이미지 확대" hidden>
+  <div class="source-image-tools"><strong id="sourceImageTitle" style="flex:1;">원본 이미지</strong><button type="button" id="sourceImageMinus" aria-label="이미지 축소">−</button><output id="sourceImageScaleLabel" aria-live="polite">100%</output><button type="button" id="sourceImagePlus" aria-label="이미지 확대">＋</button><button type="button" id="sourceImageFit">화면 맞춤</button><button type="button" id="sourceImageOriginal">원본 크기</button><button type="button" id="sourceImageClose">닫기</button></div>
+  <div id="sourceImageStage" class="source-image-stage"><img id="sourceImageLarge" alt="확대한 원본 이미지" /></div>
+</div>
 <!-- Global Loading Bar Overlay -->
 <div class="loading-overlay" id="loadingOverlay" aria-live="polite">
   <div class="loading-card">
@@ -1779,8 +1808,8 @@ function hwpLayerOps(node) {
 function hwpLayerOwner(node) {
   for(const op of hwpLayerOps(node)) {
     const key=op.source?.stableSourceKey || "";
-    const section=/section:(\d+)/.exec(key),para=/para:(\d+)/.exec(key),cell=/\/cell:(\d+):/.exec(key);
-    if(section && para)return {sec:Number(section[1]),para:Number(cell?cell[1]:para[1])};
+    const section=/section:(\d+)/.exec(key),para=/para:(\d+)/.exec(key),cell=/\/cell:(\d+):(\d+):/.exec(key);
+    if(section && para)return {sec:Number(section[1]),para:Number(cell?cell[1]:para[1]),...(cell?{control:Number(cell[2])}:{})};
   }
   return null;
 }
@@ -1832,34 +1861,88 @@ function hwpLayerSvg(node) {
     throw new Error(`unsupported drawing: ${op.type}`);
   }).join("")+children();
 }
+// Preserve native equations/paths when an inline bitmap alone covers the preceding stem.
+function repairHwpInlineImages(page,tree) {
+  try {
+    const operations=hwpLayerOps(tree.root),columns=[];
+    const visit=(node)=>{if(node.groupKind?.kind==="column")columns.push(node);for(const c of node.children || [])visit(c);if(node.child)visit(node.child);};visit(tree.root);
+    const ink=operations.filter((op)=>op.type==="textRun"?/\S/.test(op.text || ""):op.type==="image" || op.type==="equation" || (op.type==="line" && op.style?.width>0) || Boolean(op.style?.fillColor || (op.style?.strokeColor && op.style?.strokeWidth>0)));
+    const overlaps=(a,b)=>Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>.5 && Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>.5;
+    let xml=null,count=0;const movedImages=new Map();
+    for(const col of columns)for(const node of col.children || []) {
+      if(node.groupKind?.kind!=="textLine")continue;
+      const owner=hwpLayerOwner(node);if(!owner)continue;
+      for(const image of hwpLayerOps(node).filter((op)=>op.type==="image" && node.bounds.height>=op.bbox.height*.8)) {
+        if(["behindText","inFrontOfText"].includes(image.wrap) || image.transform?.rotation || image.transform?.horzFlip || image.transform?.vertFlip)continue;
+        const b=image.bbox;
+        const covered=ink.filter((op)=>op.type==="textRun" && overlaps(b,op.bbox) && (()=>{const ref=hwpLayerOwner({ops:[op]});return ref && ref.sec===owner.sec && ref.para<owner.para;})());
+        if(!covered.length)continue;
+        const y=Math.max(b.y,Math.max(...covered.map((op)=>op.bbox.y+op.bbox.height))+6);
+        const next=page.runs.filter((r)=>r.parentParaIdx===undefined && r.secIdx===owner.sec && r.paraIdx>owner.para && /^\s*\d{1,3}[.)]/.test(r.text) && r.x>=col.bounds.x && r.x<col.bounds.x+col.bounds.width).sort((a,b)=>a.paraIdx-b.paraIdx)[0];
+        if(y+b.height>(next?.y ?? Math.min(page.height-30,col.bounds.y+col.bounds.height))-5)continue;
+        let target=null;
+        for(const offset of [0,-8,8,-16,16,-24,24]) {
+          const candidate={...b,x:b.x+offset,y};
+          if(candidate.x<col.bounds.x || candidate.x+candidate.width>col.bounds.x+col.bounds.width)continue;
+          if(!ink.some((op)=>op!==image && overlaps(candidate,movedImages.get(op) || op.bbox))){target=candidate;break;}
+        }
+        if(!target)continue;
+        if(!xml)xml=new DOMParser().parseFromString(page.svg,"image/svg+xml");
+        const matches=(el)=>["x","y","width","height"].every((key)=>{const n=parseFloat(el.getAttribute(key));return Number.isFinite(n) && Math.abs(n-b[key])<=1;});
+        const sameBitmap=(el)=>typeof image.base64==="string" && image.base64.length>0 && (el.getAttribute("href") || el.getAttributeNS("http://www.w3.org/1999/xlink","href") || "").endsWith(image.base64);
+        // Cropped bitmaps use a nested SVG viewport; move the viewport, preserving its crop.
+        const element=Array.from(xml.getElementsByTagName("image")).find((el)=>matches(el) && sameBitmap(el)) || Array.from(xml.getElementsByTagName("svg")).find((el)=>matches(el) && Array.from(el.getElementsByTagName("image")).some(sameBitmap));
+        if(!element || element.getAttribute("transform"))continue;
+        let parent=element.parentNode,clipped=false;
+        while(parent?.getAttribute){const clip=parent.getAttribute("clip-path");if(clip && !/body-clip/i.test(clip))clipped=true;parent=parent.parentNode;}
+        if(clipped)continue;
+        element.setAttribute("x",String(target.x));element.setAttribute("y",String(target.y));
+        // Later candidates must avoid the new image position as well.
+        movedImages.set(image,target);count++;
+      }
+    }
+    if(!count)return page;
+    return {...page,svg:new XMLSerializer().serializeToString(xml),layout_repaired:(page.layout_repaired || 0)+count};
+  } catch(_) {return page;}
+}
+
 function repairHwpPageLayout(page,rawTree) {
   try {
     const tree=typeof rawTree==="string"?JSON.parse(rawTree):rawTree;
+    // Work on a local tree: native image repair and full reflow share corrected geometry.
+    page=repairHwpInlineImages(page,tree);
     const columns=[];
     const walk=(node)=>{if(node.groupKind?.kind==="column")columns.push(node);else{for(const c of node.children || [])walk(c);if(node.child)walk(node.child);}};
     walk(tree.root);if(!columns.length)return page;
     const moves=[],fragments=[];let repaired=0,bottom=0;
     const visible=(node)=>hwpLayerOps(node).some((op)=>op.type!=="textRun" || /\S/.test(op.text || ""));
-    const entries=columns.map((col)=>({col,blocks:(col.children || []).filter(visible).map((node,i)=>({node,i,owner:hwpLayerOwner(node),box:node.visualBounds || node.bounds})).filter((b)=>b.owner)}));
+    const reserveBox=(node)=>{
+      const a=node.bounds,b=node.visualBounds || a,x=Math.min(a.x,b.x),y=Math.min(a.y,b.y);
+      return {x,y,width:Math.max(a.x+a.width,b.x+b.width)-x,height:Math.max(a.y+a.height,b.y+b.height)-y};
+    };
+    const entries=columns.map((col)=>({col,blocks:(col.children || []).filter(visible).map((node,i)=>({node,i,owner:hwpLayerOwner(node),box:reserveBox(node)})).filter((b)=>b.owner)}));
     // A title/banner spanning both columns must reserve space in both columns.
     const spanning=entries.flatMap(({col,blocks})=>blocks.filter((b)=>b.box.width>col.bounds.width*1.35));
     const banners=spanning.filter((b)=>b.owner.para<=1 && /학년|이름|단원|평가|lesson|test/i.test(hwpLayerOps(b.node).map((op)=>op.text || "").join(" ")));
     if(spanning.length!==banners.length && columns.length>1)return page;
     const bannerBottom=banners.length?Math.max(...banners.map((b)=>b.box.y+b.box.height))+10:0;
     for(const {col,blocks} of entries) {
-      let lastBottom=Math.max(col.bounds.y,bannerBottom),lastOriginal=null;
+      let lastBottom=Math.max(col.bounds.y,bannerBottom),lastOriginal=null,previous=null;
       blocks.sort((a,b)=>a.owner.sec-b.owner.sec || a.owner.para-b.owner.para || a.i-b.i);
       for(const block of blocks) {
         const {node,owner,box}=block,isBanner=banners.includes(block);
         const gap=lastOriginal===null?0:Math.max(6,Math.min(35,box.y-lastOriginal));
-        const y=isBanner?box.y:Math.max(box.y,lastBottom+gap);
+        const sideBySide=previous && previous.owner.sec===owner.sec && previous.owner.para===owner.para &&
+          Math.min(previous.box.y+previous.box.height,box.y+box.height)>Math.max(previous.box.y,box.y) &&
+          (previous.box.x+previous.box.width<=box.x+1 || box.x+box.width<=previous.box.x+1);
+        const y=isBanner?box.y:sideBySide?box.y+previous.dy:Math.max(box.y,lastBottom+gap);
         const dy=y-box.y;
         // Serialize first: unsupported operations abort the whole repair, preserving the native page.
         const svg=hwpLayerSvg(node);
         fragments.push(`<g transform="translate(0 ${dy})">${svg}</g>`);
         moves.push({owner,node,dy,box});
         if(dy>1)repaired++;
-        if(!isBanner){lastBottom=y+box.height;lastOriginal=box.y+box.height;}
+        if(!isBanner){lastBottom=sideBySide?Math.max(lastBottom,y+box.height):y+box.height;lastOriginal=sideBySide?Math.max(lastOriginal,box.y+box.height):box.y+box.height;previous={owner,box,dy};}
         bottom=Math.max(bottom,y+box.height);
       }
     }
@@ -1868,7 +1951,7 @@ function repairHwpPageLayout(page,rawTree) {
     if(entries.some(({col,blocks})=>(col.children || []).filter(visible).length!==blocks.length))return page;
     const runs=page.runs.map((run)=>{
       const para=run.parentParaIdx ?? run.paraIdx;
-      const candidates=moves.filter((m)=>m.owner.sec===run.secIdx && m.owner.para===para && (run.parentParaIdx===undefined || m.node.groupKind?.kind==="table"));
+      const candidates=moves.filter((m)=>m.owner.sec===run.secIdx && m.owner.para===para && (run.parentParaIdx===undefined || (m.node.groupKind?.kind==="table" && (run.controlIdx===undefined || m.owner.control===undefined || m.owner.control===run.controlIdx))));
       const match=candidates.sort((a,b)=>Math.abs(a.node.bounds.y-run.y)-Math.abs(b.node.bounds.y-run.y))[0];
       return match?{...run,y:run.y+match.dy}:run;
     });
@@ -2892,7 +2975,7 @@ function openEditor(exam, variants = []) {
   const pStrip = document.getElementById("pagePreviewStrip");
   if (currentExam.page_images && currentExam.page_images.length) {
     pWrap.style.display = "block";
-    pStrip.innerHTML = currentExam.page_images.map((u) => `<img src="${u}" />`).join("");
+    pStrip.innerHTML = currentExam.page_images.map((u) => `<img src="${escapeHtml(u)}" alt="&#50896;&#48376; &#54168;&#51060;&#51648;" data-zoomable tabindex="0" role="button" />`).join("");
   } else {
     pWrap.style.display = "none";
     pStrip.innerHTML = "";
@@ -2912,7 +2995,7 @@ function selectImportVariant(value) {
   currentExam.questions = JSON.parse(JSON.stringify(next.questions));
   if(next.page_images)currentExam.page_images=[...next.page_images];
   const pStrip=document.getElementById("pagePreviewStrip");
-  if(pStrip)pStrip.innerHTML=(currentExam.page_images || []).map((u)=>`<img src="${u}" />`).join("");
+  if(pStrip)pStrip.innerHTML=(currentExam.page_images || []).map((u)=>`<img src="${escapeHtml(u)}" alt="&#50896;&#48376; &#54168;&#51060;&#51648;" data-zoomable tabindex="0" role="button" />`).join("");
   currentExam.title = next.title;
   document.getElementById("edTitle").value = next.title;
   document.getElementById("fastAnswersInput").value = "";
@@ -3016,16 +3099,17 @@ function compactAnswerInputs(q,idx) {
   }).join("");
 }
 const imageCropHistory=new WeakMap();
+const questionRegionHistory=new WeakMap();
 function questionImagesHtml(q,idx) {
   if(!q.images?.length)return "";
-  return `<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<div><img src="${escapeHtml(url)}" alt="${q.num}번 문제 이미지 ${i+1}" loading="lazy" /><div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;"><button type="button" class="btn btn-light btn-sm" onclick="openImageCropModal(${idx},${i})">✂️ 이미지 ${i+1} 자르기</button>${imageCropHistory.get(q)?.has(url)?`<button type="button" class="btn btn-light btn-sm" onclick="undoQuestionImageCrop(${idx},${i})">자르기 되돌리기</button>`:""}</div></div>`).join("")}</div>`;
+  return `<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<div><img src="${escapeHtml(url)}" alt="${q.num}번 문제 이미지 ${i+1}" loading="lazy" data-zoomable tabindex="0" role="button" aria-label="${q.num}번 이미지 ${i+1} 확대" /><div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;"><button type="button" class="btn btn-light btn-sm" onclick="openImageCropModal(${idx},${i})">✂️ 이미지 ${i+1} 자르기</button>${imageCropHistory.get(q)?.has(url)?`<button type="button" class="btn btn-light btn-sm" onclick="undoQuestionImageCrop(${idx},${i})">자르기 되돌리기</button>`:""}</div></div>`).join("")}</div>`;
 }
 function renderCompactAnswerTable(list) {
   const all=document.getElementById("showCompletedAnswers").checked;
   const types={choice:"객관식",short:"단답",sentence:"문장형 · 교사 검토",ox:"OX / T·F",matching:"연결",blanks:"빈칸"};
   if(currentExam.page_images?.length && (currentExam.mode==="omr_pages" || currentExam.questions.some((q)=>!q.images?.length && !questionContent(q).trim()))) {
     const pages=document.createElement("div");pages.className="answer-question-images original";
-    pages.innerHTML=`<strong>시험지 원본</strong>${currentExam.page_images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="시험지 ${i+1}페이지" loading="lazy" />`).join("")}`;
+    pages.innerHTML=`<strong>시험지 원본</strong>${currentExam.page_images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="시험지 ${i+1}페이지" loading="lazy" data-zoomable tabindex="0" role="button" />`).join("")}`;
     list.appendChild(pages);
   }
   let count=0;
@@ -3037,6 +3121,7 @@ function renderCompactAnswerTable(list) {
       ${!imageQuestion(q)?`<div class="answer-question">${escapeHtml(questionContent(q))}</div>`:""}
       ${questionImagesHtml(q,idx)}
       ${questionReviewReasons(q).length?`<div style="color:var(--red);font-size:0.85rem;">${questionReviewReasons(q).map(escapeHtml).join(" · ")}</div>`:""}
+      <div class="answer-controls"><button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder(${idx})">원본에서 문제 영역 다시 선택</button>${questionRegionHistory.get(q)?.length?`<button type="button" class="btn btn-light btn-sm" onclick="undoSourceQuestionRegions(${idx})">영역 교체 되돌리기</button>`:""}</div>
       <div class="answer-controls"><strong>정답 지정</strong>${q.type==="choice"?`<label><input type="checkbox" id="answer-multi-compact-${idx}" ${q.multi?"checked":""} onchange="setCheckboxMulti(${idx},this.checked)" /> 복수 정답</label>`:""}</div>
       <div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div>`;
     list.appendChild(row);
@@ -3246,7 +3331,7 @@ function renderEditorQuestions() {
       : "";
     const hasPages = Boolean(currentExam.page_images && currentExam.page_images.length);
     const cropBtnHtml = hasPages
-      ? `<button type="button" class="btn btn-light btn-sm" onclick="openCropModal(${idx})">✂️ 원문에서 오려 넣기</button>`
+      ? `<button type="button" class="btn btn-light btn-sm" onclick="openCropModal(${idx})">✂️ 원문에서 오려 넣기</button><button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder(${idx})">원본에서 문제 영역 다시 선택</button>${questionRegionHistory.get(q)?.length?`<button type="button" class="btn btn-light btn-sm" onclick="undoSourceQuestionRegions(${idx})">영역 교체 되돌리기</button>`:""}`
       : "";
     const imgToolsHtml = `
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 8px;">
@@ -3441,6 +3526,115 @@ let cropDragging = false;
 let cropPointerId = null;
 let cropStart = null;
 let cropRect = null;
+let cropDisplayZoom=100;
+function setCropDisplayZoom(value) {
+  cropDisplayZoom=Math.max(50,Math.min(300,Number(value)||100));
+  const canvas=document.getElementById("cropCanvas"),width=Math.min(canvas.width,Math.max(1,(canvas.parentElement?.clientWidth || canvas.width+18)-18));
+  if(canvas.style){canvas.style.maxWidth="none";canvas.style.width=`${width*cropDisplayZoom/100}px`;}
+  document.getElementById("cropDisplayScale").textContent=`${cropDisplayZoom}%`;
+}
+let sourceBuilderRegions=[],sourceBuilderExam=null,sourceBuilderQuestions=null,sourceBuilderPages=null,pendingSourceBuild=null;
+function isSourceBuilder() {return cropMode==="replace-question" || cropMode==="new-question";}
+function updateCropApplyState() {
+  const valid=Boolean(cropSourceImg && cropRect && cropRect.w>=12 && cropRect.h>=12 && !cropDragging);
+  document.getElementById("applyCropBtn").disabled=!(valid || (isSourceBuilder() && sourceBuilderRegions.length));
+  document.getElementById("addSourceRegionBtn").disabled=!valid;
+}
+function renderSourceRegionList() {
+  document.getElementById("sourceRegionList").innerHTML=sourceBuilderRegions.map((entry,i)=>`<div style="max-width:160px;"><img src="${entry.url}" alt="선택 영역 ${i+1}" data-zoomable tabindex="0" role="button" style="max-width:100%;max-height:100px;" /><div>${i+1}. ${entry.region.page}쪽 <button type="button" class="btn btn-light btn-sm" onclick="removeSourceRegion(${i})">빼기</button></div></div>`).join("");
+  updateCropApplyState();
+}
+function removeSourceRegion(index) {sourceBuilderRegions.splice(index,1);renderSourceRegionList();}
+function selectedSourceRegion() {
+  if(!cropSourceImg || !cropRect || cropDragging || cropRect.w<12 || cropRect.h<12)throw new Error("문제 영역을 먼저 드래그해 주세요.");
+  const out=document.createElement("canvas"),x=Math.max(0,Math.floor(cropRect.x)),y=Math.max(0,Math.floor(cropRect.y));
+  out.width=Math.min(cropSourceImg.width-x,Math.ceil(cropRect.w));out.height=Math.min(cropSourceImg.height-y,Math.ceil(cropRect.h));
+  if(out.width<12 || out.height<12)throw new Error("선택 영역이 너무 작습니다.");
+  const ctx=out.getContext("2d");ctx.fillStyle="#ffffff";ctx.fillRect(0,0,out.width,out.height);ctx.drawImage(cropSourceImg,x,y,out.width,out.height,0,0,out.width,out.height);
+  return {url:out.toDataURL("image/jpeg",.95),region:{page:cropPageIdx+1,role:"question",rect:{x,y,width:out.width,height:out.height}}};
+}
+function stageSourceRegion() {
+  if(!isSourceBuilder())return;
+  try {sourceBuilderRegions.push(selectedSourceRegion());cropRect=null;drawCropCanvas();renderSourceRegionList();document.getElementById("cropSelInfo").textContent=`${sourceBuilderRegions.length}개 영역을 담았습니다. 다른 영역을 더 선택하거나 제작을 완료하세요.`;}
+  catch(error){document.getElementById("cropSelInfo").textContent=error.message;}
+}
+function openSourceQuestionBuilder(qIdx=null,pageIdx=0) {
+  if(!currentExam)return;
+  if(qIdx!==null && !currentExam.questions[qIdx])return;
+  if(!currentExam.page_images?.length) {
+    pendingSourceBuild={exam:currentExam,qIdx,question:qIdx===null?null:currentExam.questions[qIdx]};
+    editorNotice("원본 페이지를 먼저 불러와 주세요. 기존 문항과 정답은 유지됩니다.");
+    document.getElementById("sourcePagesInput").click();return;
+  }
+  cropMode=qIdx===null?"new-question":"replace-question";cropTargetIdx=qIdx ?? -1;cropTargetQuestion=qIdx===null?null:currentExam.questions[qIdx];
+  sourceBuilderExam=currentExam;sourceBuilderQuestions=currentExam.questions;sourceBuilderPages=currentExam.page_images;sourceBuilderRegions=[];
+  document.getElementById("sourceQuestionOptions").hidden=false;
+  document.getElementById("sourceNewQuestionFields").style.display=qIdx===null?"flex":"none";
+  document.getElementById("sourceRegionHelp").textContent=qIdx===null?"유형을 정하고 문제 전체를 선택하세요. 떨어진 지문·그림·보기는 ‘선택 영역 담기’로 순서대로 묶을 수 있습니다.":"선택한 영역으로 기존 문제 이미지 전체를 교체합니다. 정답·문제 유형·배점은 유지합니다. 떨어진 내용은 여러 영역으로 담을 수 있습니다.";
+  document.getElementById("cropTitle").textContent=qIdx===null?"원본 영역으로 새 문항 만들기":"원본에서 문제 영역 다시 선택";
+  document.getElementById("cropTargetLabel").textContent=qIdx===null?"":`(${cropTargetQuestion.num}번)`;
+  document.getElementById("cropHelp").textContent="원본 페이지에서 질문·지문·그림·보기를 포함할 영역을 드래그하세요. 한 영역만 선택했다면 바로 아래 제작 버튼을 눌러도 됩니다.";
+  document.getElementById("applyCropBtn").textContent=qIdx===null?"새 문항 추가":"이 영역으로 문항 교체";
+  document.getElementById("cropModal").classList.add("show");
+  renderSourceRegionList();loadCropPage(pageIdx);
+}
+function applySourceQuestionRegions() {
+  if(currentExam!==sourceBuilderExam || currentExam.questions!==sourceBuilderQuestions || currentExam.page_images!==sourceBuilderPages)return;
+  const existing=cropTargetQuestion;
+  if(cropMode==="replace-question" && currentExam.questions[cropTargetIdx]!==existing)return;
+  try {
+    const entries=[...sourceBuilderRegions];
+    if(cropRect && cropSourceImg)entries.push(selectedSourceRegion());
+    if(!entries.length)throw new Error("문제 영역을 먼저 선택해 주세요.");
+    let q=existing;
+    if(cropMode==="new-question") {
+      const type=document.getElementById("sourceQuestionType").value;
+      if(!["choice","short","sentence","ox","matching","blanks"].includes(type))throw new Error("문제 유형을 선택해 주세요.");
+      const count=Math.max(2,Math.min(10,Math.round(Number(document.getElementById("sourceChoiceCount").value)||5)));
+      const slots=Math.max(1,Math.min(30,Math.round(Number(document.getElementById("sourceResponseCount").value)||1)));
+      const num=Math.max(0,...currentExam.questions.map((item)=>Number(item.num)||0))+1;
+      q={num,type,prompt:"원본에서 선택한 문제",passage:"",answer:"",points:1,multi:false,explain:"",images:[],content_mode:"image",source_label:String(num),choices:type==="ox"?["O","X"]:["choice","matching"].includes(type)?Array.from({length:count},(_,i)=>CIRCLED[i] || String(i+1)):[]};
+      if(["ox","matching","blanks"].includes(type))q.response_items=Array.from({length:slots},(_,i)=>({label:`(${i+1})`,...(type==="blanks"?{type:"short"}:{})}));
+      prepareQuestion(q,false);
+    } else {
+      if(!questionRegionHistory.has(q))questionRegionHistory.set(q,[]);
+      questionRegionHistory.get(q).push({images:[...(q.images || [])],content_mode:q.content_mode,source_regions:q.source_regions,image_review_reason:q.image_review_reason});
+    }
+    q.images=entries.map((entry)=>entry.url);q.source_regions=entries.map((entry)=>entry.region);q.content_mode="image";delete q.image_review_reason;
+    if(cropMode==="new-question")currentExam.questions.push(q);
+    const switched=document.getElementById("edMode").value==="omr_pages";
+    if(switched){currentExam.mode="cards";document.getElementById("edMode").value="cards";}
+    closeCropModal();focusedQuestionNum=null;editorView="answers";document.getElementById("showCompletedAnswers").checked=true;renderEditorQuestions();
+    editorNotice(`선택한 ${entries.length}개 영역으로 ${q.num}번 문항을 제작했습니다.${switched?" 선택한 문제 이미지가 표시되도록 문항 카드형으로 바꿨습니다.":""} 정답·답칸을 확인한 뒤 저장·배포하세요.`);
+  } catch(error){document.getElementById("cropSelInfo").textContent=error.message;updateCropApplyState();}
+}
+function undoSourceQuestionRegions(idx) {
+  const q=currentExam?.questions[idx],previous=q && questionRegionHistory.get(q)?.pop();if(!previous)return;
+  for(const key of ["images","content_mode","source_regions","image_review_reason"]){if(previous[key]===undefined)delete q[key];else q[key]=previous[key];}
+  renderEditorQuestions();
+}
+async function loadEditorSourcePages(input) {
+  const files=Array.from(input.files || []);if(!files.length || !currentExam)return;
+  const exam=currentExam,request=pendingSourceBuild;pendingSourceBuild=null;
+  showLoadingProgress("원본 페이지 불러오기","기존 문항과 정답을 유지하며 페이지를 읽습니다.",5);
+  try {
+    const pages=[];
+    for(const file of files) {
+      const ext=file.name.split(".").pop().toLowerCase();
+      if(["hwp","hwpx","pdf"].includes(ext)) {
+        const parsed=await (ext==="pdf"?parsePdfFile(file,true):parseHwpFile(file,true));pages.push(...(parsed.page_images || []));
+      } else if(file.type.startsWith("image/")) {const info=await compressImageFromBlobOrCanvas(file,1800);if(info)pages.push(info.url);}
+      else throw new Error("HWP, HWPX, PDF 또는 이미지 파일을 선택해 주세요.");
+    }
+    if(currentExam!==exam)return;
+    if(!pages.length)throw new Error("원본 페이지를 읽지 못했습니다.");
+    exam.page_images=pages;document.getElementById("pagePreviewWrap").style.display="block";
+    document.getElementById("pagePreviewStrip").innerHTML=pages.map((url,i)=>`<img src="${escapeHtml(url)}" alt="원본 ${i+1}쪽" data-zoomable tabindex="0" role="button" />`).join("");
+    editorNotice(`${pages.length}쪽을 불러왔습니다. 기존 문항과 정답은 유지했습니다.`);
+    if(request?.exam===exam && (request.qIdx===null || exam.questions[request.qIdx]===request.question))openSourceQuestionBuilder(request.qIdx);
+  } catch(error){if(currentExam===exam)editorNotice(error.message || "원본 페이지를 읽지 못했습니다.");}
+  finally {input.value="";hideLoadingProgress();}
+}
 
 function drawCropCanvas() {
   const canvas = document.getElementById("cropCanvas");
@@ -3469,7 +3663,7 @@ function loadCropPage(pIdx) {
   cropRect = null;
   const canvas=document.getElementById("cropCanvas");
   canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
-  document.getElementById("applyCropBtn").disabled = true;
+  updateCropApplyState();
   document.getElementById("cropSelInfo").textContent = "이미지를 불러오는 중입니다...";
   const tabs = document.getElementById("cropPageTabs");
   tabs.innerHTML = pages.map((_, i) => `<button type="button" class="btn btn-sm ${i === cropPageIdx ? "btn-primary" : "btn-light"}" onclick="loadCropPage(${i})">${cropMode==="image"?`이미지 ${i+1}`:`${i+1}쪽`}</button>`).join("");
@@ -3481,7 +3675,9 @@ function loadCropPage(pIdx) {
     const canvas = document.getElementById("cropCanvas");
     canvas.width = img.width;
     canvas.height = img.height;
+    setCropDisplayZoom(100);
     document.getElementById("cropSelInfo").textContent="남길 영역을 드래그해서 선택해 주세요.";
+    updateCropApplyState();
     drawCropCanvas();
   };
   img.onerror=()=>{if(requestId===cropRequestId)document.getElementById("cropSelInfo").textContent="이미지를 불러오지 못했습니다. 다른 이미지를 선택하거나 다시 열어 주세요.";};
@@ -3492,6 +3688,7 @@ function openCropModal(qIdx) {
   if (!pages.length) return alert("불러온 원본 페이지 이미지가 없습니다.");
   if(!currentExam.questions[qIdx])return;
   cropMode="page";
+  document.getElementById("sourceQuestionOptions").hidden=true;
   cropTargetIdx = qIdx;
   const q = currentExam.questions[qIdx];
   cropTargetQuestion=q;
@@ -3505,6 +3702,7 @@ function openCropModal(qIdx) {
 function openImageCropModal(qIdx,imgIdx=0) {
   const q=currentExam?.questions[qIdx];if(!q?.images?.[imgIdx])return;
   cropMode="image";cropTargetIdx=qIdx;cropTargetQuestion=q;
+  document.getElementById("sourceQuestionOptions").hidden=true;
   document.getElementById("cropTitle").textContent="✂️ 문제 이미지 자르기";
   document.getElementById("cropHelp").textContent="문제에서 남길 부분만 마우스 또는 손가락으로 드래그하세요. 어두운 부분은 잘려 나가고, 선택한 이미지 하나만 교체됩니다.";
   if(document.getElementById("edMode").value==="omr_pages")document.getElementById("cropHelp").textContent+=" 자른 문항을 학생에게 표시하려면 시험지 표시 방식을 ‘문항 카드형’으로 선택하세요.";
@@ -3517,6 +3715,7 @@ function closeCropModal() {
   ++cropRequestId;cropSourceImg=null;cropDragging=false;cropStart=null;cropRect=null;
   document.getElementById("applyCropBtn").disabled=true;
   document.getElementById("cropModal").classList.remove("show");
+  sourceBuilderRegions=[];
 }
 function undoQuestionImageCrop(qIdx,imgIdx) {
   const q=currentExam?.questions[qIdx],url=q?.images?.[imgIdx];
@@ -3560,8 +3759,8 @@ cropCanvasEl.addEventListener("pointermove", (e) => {
 cropCanvasEl.addEventListener("pointerup", (e) => {
   if (!cropDragging || e.pointerId!==cropPointerId) return;
   cropDragging = false;
+  updateCropApplyState();
   const valid = cropRect && cropRect.w >= 12 && cropRect.h >= 12;
-  document.getElementById("applyCropBtn").disabled = !valid;
   document.getElementById("cropSelInfo").textContent = valid
     ? `선택 영역: ${Math.round(cropRect.w)} × ${Math.round(cropRect.h)} px`
     : "영역이 너무 작습니다. 다시 크게 드래그해 주세요.";
@@ -3569,13 +3768,14 @@ cropCanvasEl.addEventListener("pointerup", (e) => {
 cropCanvasEl.addEventListener("pointercancel",(e)=>{
   if(cropDragging && e.pointerId!==cropPointerId)return;
   cropDragging=false;cropStart=null;cropRect=null;
-  document.getElementById("applyCropBtn").disabled=true;
+  updateCropApplyState();
   document.getElementById("cropSelInfo").textContent="선택이 취소되었습니다. 다시 드래그해 주세요.";
   drawCropCanvas();
 });
 document.getElementById("closeCropBtn").addEventListener("click",closeCropModal);
 document.getElementById("cancelCropBtn").addEventListener("click",closeCropModal);
 function applyQuestionImageCrop() {
+  if(isSourceBuilder()){applySourceQuestionRegions();return;}
   if(cropTargetIdx<0 || cropDragging || !cropSourceImg || !cropRect || cropRect.w<12 || cropRect.h<12)return;
   const q=currentExam?.questions[cropTargetIdx];
   if(!q || q!==cropTargetQuestion || (cropMode==="image" && q.images[cropPageIdx]!==cropSourceUrl))return;
@@ -3603,6 +3803,7 @@ function applyQuestionImageCrop() {
   }
 }
 document.getElementById("applyCropBtn").addEventListener("click",applyQuestionImageCrop);
+document.getElementById("addSourceRegionBtn").addEventListener("click",stageSourceRegion);
 function deleteQuestion(idx) {
   if (currentExam.questions.length <= 1) return alert("최소 1문항 이상 있어야 합니다.");
   currentExam.questions.splice(idx, 1);
@@ -3867,12 +4068,12 @@ function renderPreviewModal(examObj) {
     <div><b>번호</b><div style="border:1px solid var(--border);border-radius:6px;padding:6px;background:#f8fafc;color:var(--muted);">예: 20</div></div>
   </div></div>`;
   if (mode === "omr_pages" && target.page_images && target.page_images.length) {
-    html += `<div class="pv-card">${target.page_images.map((u) => `<img src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
+    html += `<div class="pv-card">${target.page_images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
   }
   if(isFromEditor)html+=`<div id="pvAnswerSummary" class="pv-card" style="background:#eff6ff;color:var(--navy);"></div>`;
   target.questions.forEach((q,idx) => {
     html += `<div class="pv-card"><div style="white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q.num)}.</strong>${escapeHtml(imageQuestion(q)?"":questionContent(q))}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
-    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:${imageQuestion(q)?"block":"flex"};flex-wrap:wrap;gap:8px;margin:8px 0;max-width:760px;">${q.images.map((u) => `<img src="${u}" style="${imageQuestion(q)?"display:block;width:100%;":""}max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
+    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:${imageQuestion(q)?"block":"flex"};flex-wrap:wrap;gap:8px;margin:8px 0;max-width:760px;">${q.images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" style="${imageQuestion(q)?"display:block;width:100%;":""}max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
     if(isFromEditor) {
       html+=teacherAnswerInputsHtml(q,idx);
       html+=`<div style="margin-top:12px;"><label>이 문항 배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=Math.max(0.5,Number(this.value)||1)" style="width:70px;padding:6px;" /> 점</label></div>`;
@@ -4016,6 +4217,46 @@ document.getElementById("saveCfgBtn").addEventListener("click", () => {
   document.getElementById("apiConfigModal").classList.remove("show");
   alert("설정이 저장되었습니다.");
 });
+
+/* Source image enlargement: shared with the student page. */
+let sourceImageZoom=100,sourceImageBaseWidth=0,sourceImageOpener=null;
+function setSourceImageZoom(value) {
+  const amount=Number(value);if(!Number.isFinite(amount))return;
+  sourceImageZoom=Math.max(25,Math.min(500,Math.round(amount)));
+  const img=document.getElementById("sourceImageLarge");
+  img.style.width=`${Math.max(1,sourceImageBaseWidth*sourceImageZoom/100)}px`;
+  document.getElementById("sourceImageScaleLabel").textContent=`${sourceImageZoom}%`;
+}
+function fitSourceImage() {
+  const img=document.getElementById("sourceImageLarge"),stage=document.getElementById("sourceImageStage");
+  if(!img.naturalWidth || !img.naturalHeight)return;
+  sourceImageBaseWidth=img.naturalWidth*Math.min(1,Math.max(1,stage.clientWidth-24)/img.naturalWidth,Math.max(1,stage.clientHeight-24)/img.naturalHeight);
+  setSourceImageZoom(100);stage.scrollTop=0;stage.scrollLeft=0;
+}
+function openSourceImage(image) {
+  if(!image?.src)return;
+  sourceImageOpener=image;
+  document.getElementById("sourceImageTitle").textContent=image.alt || "원본 이미지";
+  document.getElementById("sourceImageModal").hidden=false;
+  const large=document.getElementById("sourceImageLarge");large.onload=fitSourceImage;large.style.width="";sourceImageZoom=100;sourceImageBaseWidth=0;
+  document.getElementById("sourceImageScaleLabel").textContent="100%";
+  large.src=image.currentSrc || image.src;fitSourceImage();
+  document.getElementById("sourceImageClose").focus?.();
+}
+function closeSourceImage() {
+  document.getElementById("sourceImageModal").hidden=true;
+  const large=document.getElementById("sourceImageLarge");large.onload=null;large.removeAttribute?.("src");
+  sourceImageOpener?.focus?.();sourceImageOpener=null;
+}
+function initSourceImageViewer() {
+  document.addEventListener("click",(event)=>{const img=event.target?.closest?.("img[data-zoomable]");if(img)openSourceImage(img);});
+  document.addEventListener("keydown",(event)=>{
+    if(event.key==="Escape" && !document.getElementById("sourceImageModal").hidden){event.preventDefault();closeSourceImage();}
+    else if((event.key==="Enter" || event.key===" ") && event.target?.matches?.("img[data-zoomable]")){event.preventDefault();openSourceImage(event.target);}
+  });
+  for(const [id,handler] of [["sourceImageClose",closeSourceImage],["sourceImagePlus",()=>setSourceImageZoom(sourceImageZoom+25)],["sourceImageMinus",()=>setSourceImageZoom(sourceImageZoom-25)],["sourceImageFit",fitSourceImage],["sourceImageOriginal",()=>{const img=document.getElementById("sourceImageLarge");if(sourceImageBaseWidth)setSourceImageZoom(img.naturalWidth/sourceImageBaseWidth*100);}]])document.getElementById(id).addEventListener("click",handler);
+}
+initSourceImageViewer();
 
 /* ======================== BOOT ======================== */
 (async function boot() {
