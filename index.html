@@ -116,6 +116,8 @@
     gap: 8px;
     margin-top: 10px;
   }
+  .card { overflow-wrap:anywhere; }
+  .short-input { max-width:100%;box-sizing:border-box; }
   .choice-btn {
     display: flex;
     align-items: center;
@@ -280,6 +282,8 @@ const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbykvpnccwVJLeZD
 const params = new URLSearchParams(window.location.search);
 const API_URL = (params.get("api") || DEFAULT_API_URL).trim();
 const EXAM_ID = (params.get("id") || "").trim();
+const TEACHER_TRIAL = params.get("teacher_trial")==="1";
+let trialInitialized = false;
 
 let EXAM = null;
 let verifiedPin = "";
@@ -399,10 +403,20 @@ function escapeHtml(s) {
 }
 
 function optionLabel(q,index) { return q.choice_labels?.[index] || CIRCLED[index] || String(index+1); }
+function contentLineBreaks(text) { return String(text || "").replace(/\r\n?/g,"\n").replace(/[\u2028\u2029]/g,"\n").replace(/<br\s*\/?>/gi,"\n"); }
+function choiceDisplayText(q,index,value) {
+  let text=String(value ?? q.choices?.[index] ?? "").trim();
+  const label=String(optionLabel(q,index)).normalize("NFKC").toLowerCase();
+  const circled=/^([①-⑳Ⓐ-ⓩ])\s*/u.exec(text);
+  if(circled && circled[1].normalize("NFKC").toLowerCase()===label)text=text.slice(circled[0].length).trim();
+  const prefix=/^([A-Za-z가-힣]|\d{1,3})[.)]\s+/.exec(text);
+  if(prefix && prefix[1].normalize("NFKC").toLowerCase()===label)text=text.slice(prefix[0].length).trim();
+  return text.normalize("NFKC").toLowerCase()===label?"":text;
+}
 function imageQuestion(q) { return q.content_mode === "image" && Boolean(q.images?.length); }
 function questionContent(q) {
   if(imageQuestion(q))return "";
-  const prompt=String(q.prompt || "").trim(), passage=String(q.passage || "").trim();
+  const prompt=contentLineBreaks(q.prompt).trim(), passage=contentLineBreaks(q.passage).trim();
   return passage && !prompt.includes(passage) ? [prompt,passage].filter(Boolean).join("\n\n") : (prompt || passage);
 }
 function isStructuredQuestion(q) { return ["ox","matching","blanks"].includes(q.type); }
@@ -417,22 +431,25 @@ function questionAnswered(q) {
   return parts.length===(q.response_items || []).length && parts.length>0 && parts.every((v)=>v.trim()!=="");
 }
 function responseOptions(q,item) {
-  if(q.type==="ox")return (q.choices || ["O","X"]).map((v)=>({value:v,label:v==="O"?"○ (O)":v==="X"?"× (X)":v}));
-  if(q.type==="matching")return (q.choices || []).map((v,i)=>({value:String(i+1),label:`${escapeHtml(optionLabel(q,i))} ${imageQuestion(q) || v===CIRCLED[i]?"":v}`}));
+  if(q.type==="ox" || item.type==="ox")return (q.type==="ox"?q.choices:(item.choices || ["O","X"])).map((v)=>({value:v,label:v==="O"?"○ (O)":v==="X"?"× (X)":v}));
+  if(q.type==="matching")return (q.choices || []).map((v,i)=>({value:String(i+1),label:`${optionLabel(q,i)} ${imageQuestion(q)?"":choiceDisplayText(q,i,v)}`}));
+  if(item.type==="choice")return (item.choices || []).map((v,i)=>({value:v,label:`${optionLabel(item,i)} ${imageQuestion(q)?"":choiceDisplayText(item,i,v)}`}));
   return (item.choices || []).map((v)=>({value:v,label:v}));
 }
 function structuredInputsHtml(q) {
   const arg=escapeHtml(JSON.stringify(String(q.num)));
   const saved=readResponseParts(answers[String(q.num)]);
-  const matchingChoices=q.type==="matching" && !imageQuestion(q) ? `<div style="margin:10px 0;line-height:1.8;">${q.choices.map((c,i)=>`<div><b>${escapeHtml(optionLabel(q,i))}</b> ${escapeHtml(c===CIRCLED[i]?"":c)}</div>`).join("")}</div>` : "";
+  const matchingChoices=q.type==="matching" && !imageQuestion(q) ? `<div style="margin:10px 0;line-height:1.8;">${q.choices.map((c,i)=>`<div><b>${escapeHtml(optionLabel(q,i))}</b> ${escapeHtml(choiceDisplayText(q,i,c))}</div>`).join("")}</div>` : "";
   return matchingChoices+(q.response_items || []).map((item,ri)=>{
     const options=responseOptions(q,item);
-    const label=`<span style="font-weight:700;min-width:60px;">${escapeHtml(item.label || `답 ${ri+1}`)}</span>${item.text && !imageQuestion(q)?`<span>${escapeHtml(item.text)}</span>`:""}`;
+    const label=`<span style="font-weight:700;min-width:60px;">${escapeHtml(item.label || `답 ${ri+1}`)}</span>${item.text && !imageQuestion(q)?`<span style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(contentLineBreaks(item.text))}</span>`:""}`;
     let input;
-    if(q.type==="ox") {
+    if(q.type==="ox" || item.type==="ox" || item.type==="choice") {
       input=`<div style="display:flex;gap:8px;flex-wrap:wrap;">${options.map((o,oi)=>`<button type="button" class="omr-pill judgment-pill ${saved[ri]===o.value?"selected":""}" id="rsp-${q.num}-${ri}-${oi}" onclick="setResponsePart(${arg},${ri},${escapeHtml(JSON.stringify(o.value))},true)">${escapeHtml(o.label)}</button>`).join("")}</div>`;
     } else if(options.length) {
       input=`<select aria-label="${escapeHtml(item.label || `답 ${ri+1}`)}" onchange="setResponsePart(${arg},${ri},this.value)" style="padding:10px;border:1px solid var(--border);border-radius:8px;max-width:100%;min-width:160px;"><option value="">선택하세요</option>${options.map((o)=>`<option value="${escapeHtml(o.value)}" ${saved[ri]===o.value?"selected":""}>${escapeHtml(o.label)}</option>`).join("")}</select>`;
+    } else if(item.type==="sentence") {
+      input=`<textarea rows="3" class="short-input" aria-label="${escapeHtml(item.label || `답 ${ri+1}`)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="문장으로 답을 입력하세요" oninput="setResponsePart(${arg},${ri},this.value)">${escapeHtml(saved[ri] || "")}</textarea>`;
     } else {
       input=`<input type="text" class="short-input" value="${escapeHtml(saved[ri] || "")}" aria-label="${escapeHtml(item.label || `답 ${ri+1}`)}" style="flex:1;min-width:160px;margin:0;" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="답을 입력하세요" oninput="setResponsePart(${arg},${ri},this.value)" />`;
     }
@@ -538,6 +555,10 @@ function startExamSession() {
   examStartedAt = Date.now();
   startExamTimer();
   document.getElementById("submitBtn").addEventListener("click", () => submitExam(false));
+  if(TEACHER_TRIAL){
+    ["grade","classNum","studentNum"].forEach((id)=>{document.getElementById(id).value="체험";});
+    showInlineNotice("교사 체험 모드입니다. 정답을 넣지 않아도 풀 수 있으며, 제출 기록은 저장하지 않습니다.");
+  }
 }
 
 function startExamTimer() {
@@ -599,6 +620,10 @@ function attachAntiCopyHandlers() {
 
 async function init() {
   const root = document.getElementById("mainRoot");
+  if(TEACHER_TRIAL){
+    root.innerHTML='<div class="card">교사 화면의 시험지 초안을 기다리고 있습니다.</div>';
+    window.parent.postMessage({type:"qr-exam-trial-ready"},location.origin==="null"?"*":location.origin);return;
+  }
   if (!API_URL || !EXAM_ID) {
     root.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px;">
       <h2 style="color:var(--navy);margin:0 0 8px;">공용 QR 시험지 뷰어</h2>
@@ -724,7 +749,7 @@ function renderQuestions() {
   displayQuestions.forEach((q) => {
     const card = document.createElement("section");
     card.className = "card";
-    let html = `<div style="font-size:1.02rem;white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q._dispNum)}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
+    let html = `<div style="font-size:1.02rem;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q._dispNum)}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
     if (q.images && q.images.length) {
       html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
     }
@@ -741,7 +766,7 @@ function renderQuestions() {
           <button type="button" class="choice-btn" id="ch-${q.num}-${cObj.origVal}" onclick="pickChoice('${q.num}', '${cObj.origVal}', ${origValsArg}, ${Boolean(q.multi)}, 'ch')">
             <span class="check-box">✓</span>
             <span style="font-weight:700;color:var(--muted);">${escapeHtml(optionLabel(q,ci))}</span>
-            <span>${escapeHtml(imageQuestion(q) || cObj.text===CIRCLED[ci]?"":cObj.text)}</span>
+            <span style="white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(imageQuestion(q)?"":choiceDisplayText(q,ci,cObj.text))}</span>
           </button>
         `;
       }).join("") + `</div>`;
@@ -787,6 +812,14 @@ async function submitExam(isAuto = false) {
 
   try {
     // Use text/plain to avoid CORS preflight OPTIONS on Google Apps Script
+    if(TEACHER_TRIAL){
+      examSubmitted=true;if(timerInterval){clearInterval(timerInterval);timerInterval=null;}
+      document.getElementById("submitBar").style.display="none";
+      document.querySelectorAll("button,input,select,textarea").forEach((el)=>{el.disabled=true;});
+      const banner=document.getElementById("resultBanner"),count=EXAM.questions.filter(questionAnswered).length;
+      banner.innerHTML=`<div style="padding:12px;"><strong>체험 제출이 완료되었습니다.</strong><p>${count} / ${EXAM.questions.length}문항에 응답했습니다.</p><p>정답 유무와 관계없이 동작을 확인하는 체험입니다. 점수는 계산하지 않으며 학생 제출 기록·교사용 정답을 변경하지 않습니다. 다시 풀려면 위의 ‘처음부터 다시 풀기’를 누르세요.</p></div>`;
+      banner.classList.add("show");window.scrollTo({top:0,behavior:"smooth"});return;
+    }
     const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -898,6 +931,11 @@ async function submitExam(isAuto = false) {
   }
 }
 
+window.addEventListener("message",(event)=>{
+  if(!TEACHER_TRIAL || trialInitialized || window.parent===window || event.source!==window.parent || event.origin!==location.origin || event.data?.type!=="qr-exam-trial-start")return;
+  const incoming=event.data.exam;if(!incoming || !Array.isArray(incoming.questions))return;
+  EXAM={...incoming,is_open:true,time_limit_min:0,max_away_count:0};trialInitialized=true;startExamSession();
+});
 init();
 </script>
 </body>

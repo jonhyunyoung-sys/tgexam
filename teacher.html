@@ -124,15 +124,27 @@
   .img-thumbs img { height: 76px; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
   .img-thumbs.original-images { display:block;max-width:760px; }
   .img-thumbs.original-images img { display:block;width:100%;height:auto;border-radius:0; }
+  .pv-card,.pv-choice { overflow-wrap:anywhere; }
+  .pv-choice { white-space:pre-wrap; }
   .page-preview-strip { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; margin-bottom: 12px; }
   .page-preview-strip img { height: 150px; border: 1px solid var(--border); border-radius: 8px; }
   .review-summary { padding:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;margin:12px 0;line-height:1.7; }
-  .answer-row { display:grid;grid-template-columns:42px minmax(140px,1fr) minmax(240px,2fr) auto;gap:12px;align-items:center;border-bottom:1px solid var(--border);padding:12px 4px; }
+  .answer-row { display:block;border:1px solid var(--border);border-radius:10px;padding:16px;margin:14px 0;background:#fff; }
   .answer-row input,.answer-row select { padding:8px;border:1px solid var(--border);border-radius:7px;max-width:100%; }
-  .answer-row .answer-controls { display:flex;gap:8px;flex-wrap:wrap;align-items:center; }
+  .answer-row .answer-controls { display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px; }
+  .answer-row-header { display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap; }
+  .answer-question { white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;margin:12px 0;max-width:760px; }
+  .answer-question-images { max-width:760px;margin:12px 0; }
+  .answer-question-images img { display:block;max-width:100%;height:auto;margin:8px 0; }
+  .answer-question-images.original img { width:100%;margin:0; }
+  .answer-checkbox-group { display:flex;gap:8px;flex-wrap:wrap;align-items:stretch; }
+  .answer-checkbox { display:flex;gap:8px;align-items:center;border:1.5px solid var(--border);border-radius:8px;padding:10px 13px;min-height:44px;cursor:pointer;background:#fff; }
+  .answer-checkbox:has(input:checked) { border-color:var(--blue);background:#eff6ff; }
+  .answer-checkbox input[type=checkbox] { width:20px;height:20px;padding:0;margin:0;accent-color:var(--blue);flex-shrink:0; }
+  .answer-checkbox span { white-space:pre-wrap;overflow-wrap:anywhere; }
   .answer-ready { color:var(--green);font-size:0.78rem; }
   .answer-missing { color:#b45309;font-size:0.78rem; }
-  @media(max-width:700px) { .answer-row {grid-template-columns:32px 1fr auto;} .answer-row .answer-controls {grid-column:2 / -1;grid-row:2;} }
+  @media(max-width:700px) { .answer-row {padding:12px;} .answer-checkbox {padding:9px;min-height:44px;} }
 
   .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.72); z-index: 100; align-items: center; justify-content: center; padding: 18px; }
   .modal-backdrop.show { display: flex; }
@@ -239,6 +251,7 @@
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button type="button" class="btn btn-light btn-sm" id="closeEditorBtn">닫기</button>
         <button type="button" class="btn btn-blue btn-sm" id="previewEditorBtn">✍️ 학생 문제지에서 정답 입력</button>
+        <button type="button" class="btn btn-light btn-sm" id="studentTrialBtn" onclick="openStudentTrial()">🧑‍🎓 학생처럼 풀어보기</button>
         <button type="button" class="btn btn-green" id="saveAndQrBtn">☁️ 저장하고 QR 발급</button>
       </div>
     </div>
@@ -316,8 +329,8 @@
       <button type="button" class="btn btn-light btn-sm" id="reviewViewBtn" onclick="setEditorView('review')">내용 확인 필요</button>
       <button type="button" class="btn btn-light btn-sm" id="allViewBtn" onclick="setEditorView('all')">전체 문항 편집</button>
       <button type="button" class="btn btn-light btn-sm" id="answerKeyPreviewBtn" style="display:none;" onclick="showAnswerKeyPreview()">정답지 원본 확인</button>
-      <label style="font-size:0.84rem;align-self:center;"><input type="checkbox" id="showCompletedAnswers" onchange="renderEditorQuestions()" /> 완료한 정답도 보기</label>
-      <label style="font-size:0.84rem;align-self:center;">유형별 보기 <select id="recognitionFilter" onchange="setRecognitionFilter(this.value)"><option value="">전체 유형</option><option value="choice">선택형</option><option value="judgment">OX·참거짓</option><option value="matching">연결·짝짓기</option><option value="cloze">빈칸 완성</option><option value="summary">요약·표 완성</option><option value="ordering">순서·배열</option><option value="vocabulary">어휘</option><option value="reading">독해</option><option value="phonics">파닉스</option><option value="writing">문장 쓰기</option><option value="activity">활동형</option><option value="short_answer">단답</option></select></label>
+      <label style="font-size:0.84rem;align-self:center;"><input type="checkbox" id="showCompletedAnswers" checked onchange="renderEditorQuestions()" /> 완료한 정답도 보기</label>
+      <label style="font-size:0.84rem;align-self:center;">유형별 보기 <select id="recognitionFilter" onchange="setRecognitionFilter(this.value)"><option value="">전체 유형</option><option value="choice">선택형</option><option value="judgment">OX·참거짓</option><option value="matching">연결·짝짓기</option><option value="cloze">빈칸 완성</option><option value="summary">요약·표 완성</option><option value="ordering">순서·배열</option><option value="vocabulary">어휘</option><option value="reading">독해</option><option value="phonics">파닉스</option><option value="writing">문장 쓰기</option><option value="subquestions">여러 꼬리문제</option><option value="activity">활동형</option><option value="short_answer">단답</option></select></label>
     </div>
     <details id="importNotes" style="display:none;margin:8px 0;color:var(--muted);"></details>
     <div id="editorNotice" role="alert" style="display:none;padding:10px;color:#92400e;background:#fffbeb;border-radius:8px;margin:8px 0;"></div>
@@ -360,6 +373,14 @@
       </div>
     </div>
     <div class="preview-body" id="previewBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="studentTrialModal">
+  <div class="preview-modal" style="width:min(1100px,96vw);height:94vh;display:flex;flex-direction:column;">
+    <div class="preview-header"><strong>학생 체험 · 정답 입력 없이 테스트</strong><div style="display:flex;gap:6px;"><button type="button" class="btn btn-light btn-sm" onclick="openStudentTrial()">처음부터 다시 풀기</button><button type="button" class="btn btn-light btn-sm" onclick="closeStudentTrial()">닫기</button></div></div>
+    <div style="padding:8px 14px;background:#eff6ff;font-size:0.85rem;">현재 초안을 학생 화면에서 풀어봅니다. 체험 답안은 정답 설정이나 학생 제출 기록에 반영되지 않습니다.</div>
+    <iframe id="studentTrialFrame" title="학생 시험지 체험" style="width:100%;flex:1;border:0;min-height:0;"></iframe>
   </div>
 </div>
 
@@ -561,9 +582,9 @@ function cleanText(text) {
     .replace(/\r/g, "\n")
     .split("\n")
     .map((ln) => ln.replace(/[ \t]+/g, " ").trim())
-    .filter(Boolean)
-    .join("\n");
+    .join("\n").replace(/\n{3,}/g,"\n\n").trim();
 }
+function contentLineBreaks(text) { return String(text || "").replace(/\r\n?/g,"\n").replace(/[\u2028\u2029]/g,"\n").replace(/<br\s*\/?>/gi,"\n"); }
 
 function compressImageFromBlobOrCanvas(src, maxWidth = 760) {
   return new Promise((resolve) => {
@@ -608,6 +629,15 @@ function extractInlineChoices(line) {
 }
 
 function optionLabel(q,index) { return q.choice_labels?.[index] || CIRCLED[index] || String(index+1); }
+function choiceDisplayText(q,index,value) {
+  let text=String(value ?? q.choices?.[index] ?? "").trim();
+  const label=String(optionLabel(q,index)).normalize("NFKC").toLowerCase();
+  const circled=/^([①-⑳Ⓐ-ⓩ])\s*/u.exec(text);
+  if(circled && circled[1].normalize("NFKC").toLowerCase()===label)text=text.slice(circled[0].length).trim();
+  const prefix=/^([A-Za-z가-힣]|\d{1,3})[.)]\s+/.exec(text);
+  if(prefix && prefix[1].normalize("NFKC").toLowerCase()===label)text=text.slice(prefix[0].length).trim();
+  return text.normalize("NFKC").toLowerCase()===label?"":text;
+}
 function extractLetterChoices(line) {
   const markers=[...line.matchAll(/(?:^|\s)(?:([A-Ha-h])[.)]\s+(?=\S)|([Ⓐ-Ⓗⓐ-ⓗ])\s*)/g)];
   if(!markers.length || (markers.length===1 && markers[0].index>0))return [];
@@ -615,6 +645,7 @@ function extractLetterChoices(line) {
 }
 
 function worksheetTaskProfile(q) {
+  if(q.tail_questions)return {version:1,kind:"subquestions",label:"여러 꼬리문제",confidence:"high"};
   const text=questionContent(q), instruction=text.split("\n").slice(0,5).join(" ");
   const match=(pattern)=>pattern.test(instruction);
   let kind="short_answer",label="단답",confidence="medium";
@@ -645,7 +676,7 @@ function worksheetPageRole(page) {
 
 function imageQuestion(q) { return q.content_mode === "image" && Boolean(q.images?.length); }
 function questionContent(q) {
-  const prompt = String(q.prompt || "").trim(), passage = String(q.passage || "").trim();
+  const prompt = contentLineBreaks(q.prompt).trim(), passage = contentLineBreaks(q.passage).trim();
   return passage && !prompt.includes(passage) ? [prompt, passage].filter(Boolean).join("\n\n") : (prompt || passage);
 }
 
@@ -669,6 +700,37 @@ function subpartLabels(text) {
   return [...new Set([...text.matchAll(/(?:^|[\n ])\((\d{1,2}|[가-하]|[a-zA-Z])\)(?=\s|$)/g)].map((m)=>`(${m[1]})`))];
 }
 
+function tailQuestionMarker(line,parentNum) {
+  const m=/^\s*(?:\(([1-9]\d?|[가-하])\)|(\d{1,3})\s*[-–]\s*\(?([1-9]\d?)\)?[.)]?)\s*(.*)$/.exec(line);
+  if(!m || (m[2] && Number(m[2])!==Number(parentNum)))return null;
+  return {label:m[2]?`${m[2]}-${m[3]}`:`(${m[1]})`,text:m[4],explicitParent:Boolean(m[2])};
+}
+function extractTailQuestions(text,parentNum) {
+  const lines=text.split("\n"),markers=[];
+  lines.forEach((line,i)=>{const marker=tailQuestionMarker(line,parentNum);if(marker)markers.push({...marker,line:i});});
+  if(markers.length<2 || new Set(markers.map((m)=>m.label)).size!==markers.length)return null;
+  const stem=lines.slice(0,markers[0].line).join("\n").trim();
+  const common=/물음|질문|꼬리\s*문제|following\s+questions|answer\s+(?:the\s+)?questions/i.test(stem);
+  const asks=(s)=>/[?？]|고르|선택|쓰|구하|답하|이유|설명|완성|무엇|옳|틀|\b(?:choose|write|why|what|which|where|when|who|how|complete|explain)\b/i.test(s);
+  if(!markers.every((m)=>m.explicitParent || asks(m.text)))return null;
+  if(!common && /일치|true|false|빈칸|연결|match/i.test(stem))return null;
+  const items=markers.map((marker,i)=>{
+    const content=[marker.text,...lines.slice(marker.line+1,markers[i+1]?.line ?? lines.length)].join("\n").trim();
+    const instruction=content.split("\n").slice(0,2).join(" ");
+    const judgment=/일치|참|거짓|옳|판단|true|false/i.test(instruction) && /O\s*\/\s*X|○|×|true[\s\S]*false|T\s*\/\s*F/i.test(content);
+    if(judgment)return {label:marker.label,text:content,type:"ox",choices:/true|false|T\s*\/\s*F/i.test(content)?["T","F"]:["O","X"]};
+    const inline=extractInlineChoices(content);
+    if(inline.found.length>=2) {
+      const max=Math.max(...inline.found.map(([n])=>n)), choices=Array.from({length:max+1},(_,ci)=>inline.found.find(([n])=>n===ci)?.[1] || CIRCLED[ci] || String(ci+1));
+      return {label:marker.label,text:inline.prefix,type:"choice",choices};
+    }
+    const rows=content.split("\n"),letters=rows.flatMap(extractLetterChoices);
+    if(letters.length>=2){const first=rows.findIndex((line)=>extractLetterChoices(line).length);return {label:marker.label,text:rows.slice(0,first).join("\n"),type:"choice",choices:letters.map((c)=>c.text),choice_labels:letters.map((c)=>c.label)};}
+    return {label:marker.label,text:content,type:/문장.{0,20}(?:쓰|완성)|문장으로|이유.*설명|write.{0,20}sentence|explain\s+why/i.test(instruction)?"sentence":"short"};
+  });
+  return {stem,items};
+}
+
 function prepareQuestion(q, infer = false) {
   q.prompt = questionContent(q);
   q.passage = "";
@@ -679,6 +741,10 @@ function prepareQuestion(q, infer = false) {
   const responseText = q._localContent || text;
   const labels = subpartLabels(responseText);
   const instruction = text.split("\n").slice(0, 4).join(" ");
+  if(infer && !isStructuredQuestion(q)) {
+    const tail=extractTailQuestions(text,q.source_local_num || q.num);
+    if(tail){q.prompt=tail.stem;q.type="blanks";q.choices=[];delete q.choice_labels;q.tail_questions=true;q.response_items=tail.items;}
+  }
   if (infer && !isStructuredQuestion(q)) {
     const connection = /연결|(?:선|줄)을?\s*(?:긋|그어|이어)|\bmatch(?:ing)?\b|draw\s+(?:a\s+)?line/i.test(instruction);
     if(connection && !q.choices.length) {
@@ -729,6 +795,8 @@ function prepareQuestion(q, infer = false) {
     q.multi = false;
     q.response_items = (q.response_items?.length ? q.response_items : [{label:"답"}]).map((item,i)=>({
       label:String(item.label || `답 ${i+1}`), ...(item.text ? {text:String(item.text)} : {}),
+      ...(["choice","short","sentence","ox"].includes(item.type)?{type:item.type}:{}),
+      ...(Array.isArray(item.choice_labels)?{choice_labels:item.choice_labels.map(String)}:{}),
       ...(Array.isArray(item.choices) ? {choices:item.choices.map(String)} : {})
     }));
     if (q.type === "ox") {
@@ -781,8 +849,9 @@ function answerIsComplete(q) {
   if(isStructuredQuestion(q)) {
     const values=responseValues(q);
     return Boolean(q.response_items?.length) && values.length===q.response_items.length && values.every((value,i)=>{
+      if(q.response_items[i].type==="sentence")return true;
       if(!value.trim())return false;
-      if(q.type==="ox")return Boolean(judgmentValue(value));
+      if(q.type==="ox" || q.response_items[i].type==="ox")return Boolean(judgmentValue(value));
       if(q.type==="matching")return /^\d+$/.test(value) && Number(value)>=1 && Number(value)<=q.choices.length;
       const options=q.response_items[i].choices || [];
       return !options.length || value.split("|").some((v)=>options.some((option)=>option.normalize("NFKC").toLowerCase()===v.normalize("NFKC").trim().toLowerCase()));
@@ -956,6 +1025,11 @@ function splitBlocksToQuestions(blocks) {
 
     for (const rawLine of blk.text.split("\n")) {
       const line = cleanText(rawLine);
+      if(!line){
+        const lines=current?.passageLines || activeGroup?.passageLines;
+        if(lines?.length && lines.at(-1)!=="")lines.push("");
+        continue;
+      }
       if (
         !line ||
         line.startsWith("*실수한 것이 없는지") ||
@@ -1016,6 +1090,11 @@ function splitBlocksToQuestions(blocks) {
         continue;
       }
       if (!current) continue;
+      const tailMarker=tailQuestionMarker(line,current.num);
+      const parentInstruction=[current.prompt,...current.passageLines].join(" ");
+      const tailAsks=tailMarker && /[?？]|고르|선택|쓰|구하|답하|설명|이유|무엇|완성|\b(?:choose|write|what|which|where|when|who|why|how|complete|explain)\b/i.test(tailMarker.text);
+      if(tailMarker && (current._tailCapture || tailMarker.explicitParent || (tailAsks && (/물음|질문|꼬리\s*문제|following\s+questions|answer\s+(?:the\s+)?questions/i.test(parentInstruction) || !/고르|선택|choose|select/i.test(current.prompt)))))current._tailCapture=true;
+      if(current._tailCapture){current.passageLines.push(line);continue;}
       const letterChoices=extractLetterChoices(line);
       const judgmentContext=/\btrue\b|\bfalse\b|참.*거짓|일치.*(?:O|○|T)/i.test([current.prompt,...current.passageLines].join(" "));
       if(letterChoices.length && judgmentContext) {current.passageLines.push(line);continue;}
@@ -2492,6 +2571,15 @@ async function parseHwpFile(file, forcePageMode) {
   }
 }
 
+function buildStudentTrialExam(exam) {
+  return JSON.parse(JSON.stringify({id:"teacher-trial",title:exam.title || "시험지 체험",mode:exam.mode || "cards",is_open:true,
+    header_logo:exam.header_logo || "",page_images:exam.page_images || [],time_limit_min:0,max_away_count:0,score_mode:"none",
+    questions:(exam.questions || []).map((q)=>({num:q.num,type:q.type || "short",multi:Boolean(q.multi),
+      prompt:imageQuestion(q)?"":(q.prompt || ""),passage:imageQuestion(q)?"":(q.passage || ""),
+      content_mode:q.content_mode,source_label:q.source_label,choices:q.choices || [],choice_labels:q.choice_labels || [],images:q.images || [],
+      points:q.points || 1,partial_credit:Boolean(q.partial_credit),response_items:(q.response_items || []).map((item)=>({label:item.label,text:item.text,type:item.type,choices:item.choices || [],choice_labels:item.choice_labels || []}))}))}));
+}
+
 async function handleFiles(fileList) {
   const files = Array.from(fileList);
   if (!files.length) return;
@@ -2573,6 +2661,27 @@ let importedVariantDrafts = [];
 let selectedImportVariant = 0;
 let editorView = "answers";
 let focusedQuestionNum = null;
+let studentTrialSnapshot = null;
+function openStudentTrial() {
+  if(!currentExam || !currentExam.questions?.length)return;
+  studentTrialSnapshot=buildStudentTrialExam({...currentExam,title:document.getElementById("edTitle").value || currentExam.title,mode:document.getElementById("edMode").value || currentExam.mode});
+  const frame=document.getElementById("studentTrialFrame");
+  const url=new URL("index.html",location.href);url.searchParams.set("teacher_trial","1");url.searchParams.set("v","7");
+  frame.src=url.href;frame.onload=()=>sendStudentTrialSnapshot();
+  document.getElementById("studentTrialModal").classList.add("show");
+}
+function sendStudentTrialSnapshot() {
+  const frame=document.getElementById("studentTrialFrame");
+  if(frame?.contentWindow && studentTrialSnapshot)frame.contentWindow.postMessage({type:"qr-exam-trial-start",exam:studentTrialSnapshot},location.origin==="null"?"*":location.origin);
+}
+function closeStudentTrial() {
+  document.getElementById("studentTrialModal").classList.remove("show");document.getElementById("studentTrialFrame").removeAttribute("src");studentTrialSnapshot=null;
+}
+window.addEventListener("message",(event)=>{
+  const frame=document.getElementById("studentTrialFrame");
+  if(event.source!==frame?.contentWindow || event.origin!==location.origin)return;
+  if(event.data?.type==="qr-exam-trial-ready")sendStudentTrialSnapshot();
+});
 
 async function loadExams() {
   const list = document.getElementById("examList");
@@ -2627,7 +2736,7 @@ document.getElementById("edUsePin").addEventListener("change", syncPinInputUi);
 
 function openEditor(exam, variants = []) {
   editorView="answers";focusedQuestionNum=null;
-  document.getElementById("showCompletedAnswers").checked=false;
+  document.getElementById("showCompletedAnswers").checked=true;
   document.getElementById("recognitionFilter").value="";
   importedVariantDrafts = JSON.parse(JSON.stringify(variants));
   selectedImportVariant = 0;
@@ -2730,30 +2839,82 @@ function setCompactResponse(idx,row,value) {
   const q=currentExam.questions[idx];
   if(q.type==="ox")q.choices.forEach((c,oi)=>document.getElementById(`compact-${idx}-${row}-${oi}`)?.classList.toggle("active",value===c));
 }
+function checkboxAnswerOptions(q,row=null) {
+  if(row===null)return (q.choices || []).map((c,i)=>({value:String(i+1),label:`${optionLabel(q,i)}${imageQuestion(q)?"":" "+choiceDisplayText(q,i,c)}`}));
+  const item=q.response_items[row];
+  if(q.type==="ox" || item.type==="ox")return (q.type==="ox"?q.choices:(item.choices || ["O","X"])).map((c)=>({value:c,label:c==="O"?"○ (O)":c==="X"?"× (X)":c}));
+  if(q.type==="matching")return (q.choices || []).map((c,i)=>({value:String(i+1),label:`${optionLabel(q,i)}${imageQuestion(q)?"":" "+choiceDisplayText(q,i,c)}`}));
+  return (item.choices || []).map((c,i)=>({value:String(c),label:`${optionLabel(item,i)}${imageQuestion(q)?"":" "+choiceDisplayText(item,i,c)}`}));
+}
+function answerCheckboxesHtml(q,idx,row=null,scope="compact") {
+  const selected=row===null?String(q.answer || "").split(","):[responseValues(q)[row] || ""];
+  return `<div class="answer-checkbox-group" role="group" aria-label="${escapeHtml(row===null?`${q.num}번 정답`:q.response_items[row].label || "꼬리문제 정답")}">${checkboxAnswerOptions(q,row).map((option,oi)=>`<label class="answer-checkbox"><input type="checkbox" id="answer-check-${scope}-${idx}-${row===null?'main':row}-${oi}" ${selected.includes(option.value)?"checked":""} onchange="setCheckboxAnswer(${idx},${row===null?'null':row},${oi},this.checked)" /><span>${escapeHtml(option.label)}</span></label>`).join("")}</div>`;
+}
+function syncAnswerCheckboxes(idx) {
+  const q=currentExam.questions[idx];
+  const rows=q.type==="choice"?[null]:(q.response_items || []).map((_,i)=>i);
+  for(const row of rows) {
+    const selected=row===null?String(q.answer || "").split(","):[responseValues(q)[row] || ""];
+    checkboxAnswerOptions(q,row).forEach((option,oi)=>{
+      for(const scope of ["compact","preview","editor"]) {
+        const el=document.getElementById(`answer-check-${scope}-${idx}-${row===null?'main':row}-${oi}`);
+        if(el)el.checked=selected.includes(option.value);
+      }
+    });
+  }
+}
+function setCheckboxAnswer(idx,row,optionIndex,checked) {
+  const q=currentExam?.questions[idx];if(!q)return;
+  if(row!==null && !q.response_items?.[row])return;
+  const option=checkboxAnswerOptions(q,row)[optionIndex];if(!option)return;
+  if(row===null) {
+    const chosen=new Set(String(q.answer || "").split(",").filter(Boolean));
+    if(checked){if(!q.multi)chosen.clear();chosen.add(option.value);}else chosen.delete(option.value);
+    q.answer=[...chosen].sort((a,b)=>Number(a)-Number(b)).join(",");
+  } else {
+    const values=responseValues(q);values[row]=checked?option.value:"";
+    q.answer=JSON.stringify(q.response_items.map((_,i)=>values[i] || ""));
+  }
+  delete q.answer_source;syncAnswerCheckboxes(idx);markCompactAnswer(idx);updatePreviewAnswerSummary();
+}
+function setCheckboxMulti(idx,enabled) {
+  const q=currentExam.questions[idx];q.multi=Boolean(enabled);
+  if(!q.multi)q.answer=String(q.answer || "").split(",").filter(Boolean).slice(0,1).join(",");
+  delete q.answer_source;
+  for(const scope of ["compact","preview","editor"]) {const input=document.getElementById(`answer-multi-${scope}-${idx}`);if(input)input.checked=q.multi;}
+  syncAnswerCheckboxes(idx);markCompactAnswer(idx);updatePreviewAnswerSummary();
+}
 function compactAnswerInputs(q,idx) {
-  const select=(options,value,event)=>`<select onchange="${event}" style="flex:1;min-width:160px;"><option value="">정답 선택</option>${options.map(([v,label])=>`<option value="${escapeHtml(v)}" ${value===v?"selected":""}>${escapeHtml(label)}</option>`).join("")}</select>`;
-  if(q.type==="choice" && !q.multi)return select(q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${c===CIRCLED[i]?"":c}`]),String(q.answer || ""),`setCompactAnswer(${idx},this.value)`);
+  if(q.type==="choice")return answerCheckboxesHtml(q,idx);
   if(!isStructuredQuestion(q))return `<input style="flex:1;min-width:190px;" value="${escapeHtml(q.answer || "")}" placeholder="${q.type==="sentence"?"참고 답안 (선택)":q.multi?"선택할 번호: 1,3":"정답 입력"}" onchange="setCompactAnswer(${idx},this.value)" />`;
   const values=responseValues(q);
   return q.response_items.map((item,ri)=>{
     let input;
-    if(q.type==="ox")input=q.choices.map((c,oi)=>`<button type="button" id="compact-${idx}-${ri}-${oi}" class="ans-pill ${values[ri]===c?"active":""}" onclick="setCompactResponse(${idx},${ri},'${c}')">${c==="O"?"○":c==="X"?"×":c}</button>`).join("");
-    else {
-      const options=q.type==="matching"?q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${c===CIRCLED[i]?"":c}`]):(item.choices || []).map((c)=>[c,c]);
-      input=options.length?select(options,values[ri] || "",`setCompactResponse(${idx},${ri},this.value)`):`<input style="min-width:120px;flex:1;" value="${escapeHtml(values[ri] || "")}" placeholder="정답" onchange="setCompactResponse(${idx},${ri},this.value)" />`;
-    }
-    return `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;"><span style="font-size:0.82rem;">${escapeHtml(item.label)}</span>${input}</div>`;
+    if(checkboxAnswerOptions(q,ri).length)input=answerCheckboxesHtml(q,idx,ri);
+    else if(item.type==="sentence")input=`<textarea rows="3" style="min-width:180px;flex:1;" placeholder="참고 답안 (선택)" onchange="setCompactResponse(${idx},${ri},this.value)">${escapeHtml(values[ri] || "")}</textarea>`;
+    else input=`<input style="min-width:120px;flex:1;" value="${escapeHtml(values[ri] || "")}" placeholder="정답" onchange="setCompactResponse(${idx},${ri},this.value)" />`;
+    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;"><strong>${escapeHtml(item.label)}</strong>${!imageQuestion(q) && item.text?`<div style="width:100%;white-space:pre-wrap;line-height:1.7;">${escapeHtml(contentLineBreaks(item.text))}</div>`:""}${input}</div>`;
   }).join("");
 }
 function renderCompactAnswerTable(list) {
   const all=document.getElementById("showCompletedAnswers").checked;
   const types={choice:"객관식",short:"단답",sentence:"문장형 · 교사 검토",ox:"OX / T·F",matching:"연결",blanks:"빈칸"};
+  if(currentExam.page_images?.length && (currentExam.mode==="omr_pages" || currentExam.questions.some((q)=>!q.images?.length && !questionContent(q).trim()))) {
+    const pages=document.createElement("div");pages.className="answer-question-images original";
+    pages.innerHTML=`<strong>시험지 원본</strong>${currentExam.page_images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="시험지 ${i+1}페이지" loading="lazy" />`).join("")}`;
+    list.appendChild(pages);
+  }
   let count=0;
   currentExam.questions.forEach((q,idx)=>{
     if(!all && answerIsComplete(q) && q.type!=="sentence")return;
     count++;
     const row=document.createElement("div");row.className="answer-row";
-    row.innerHTML=`<strong>${q.num}</strong><div><div style="font-size:0.83rem;font-weight:700;">${types[q.type] || q.type}${q.images.length?" · 그림 포함":""}</div><div style="font-size:0.8rem;color:var(--muted);">${escapeHtml(q.prompt.split("\n")[0].slice(0,75))}</div><div id="answer-status-${idx}" class="${answerIsComplete(q)?"answer-ready":"answer-missing"}">${answerIsComplete(q)?"입력 완료":"미입력"}</div></div><div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div><button type="button" class="btn btn-light btn-sm" onclick="focusQuestion(${idx})">문제 보기·수정</button>`;
+    row.innerHTML=`<div class="answer-row-header"><strong>${q.num}번 · ${escapeHtml(types[q.type] || q.type)}</strong><span id="answer-status-${idx}" class="${answerIsComplete(q)?"answer-ready":"answer-missing"}">${answerIsComplete(q)?"입력 완료":"미입력"}</span><button type="button" class="btn btn-light btn-sm" onclick="focusQuestion(${idx})">유형·내용 수정</button></div>
+      ${!imageQuestion(q)?`<div class="answer-question">${escapeHtml(questionContent(q))}</div>`:""}
+      ${q.images?.length?`<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="${q.num}번 문제 원본 ${i+1}" loading="lazy" />`).join("")}</div>`:""}
+      ${questionReviewReasons(q).length?`<div style="color:var(--red);font-size:0.85rem;">${questionReviewReasons(q).map(escapeHtml).join(" · ")}</div>`:""}
+      <div class="answer-controls"><strong>정답 지정</strong>${q.type==="choice"?`<label><input type="checkbox" id="answer-multi-compact-${idx}" ${q.multi?"checked":""} onchange="setCheckboxMulti(${idx},this.checked)" /> 복수 정답</label>`:""}</div>
+      <div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div>`;
     list.appendChild(row);
   });
   if(!count)list.innerHTML='<div style="padding:20px;color:var(--green);">정답 입력 완료! 전체 정답을 확인하려면 ‘완료한 정답도 보기’를 선택하세요.</div>';
@@ -2768,17 +2929,26 @@ function showAnswerKeyPreview() {
 function responseEditorHtml(q, idx) {
   const values = responseValues(q);
   const rows = q.response_items.map((item, ri)=>{
-    const options = q.type === "ox" ? q.choices.map((c)=>[c,c === "O" ? "○ (O)" : c === "X" ? "× (X)" : c])
-      : q.type === "matching" ? q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${c===CIRCLED[i]?"":c}`])
+    const options = q.type === "ox" || item.type==="ox" ? (q.type==="ox"?q.choices:(item.choices || ["O","X"])).map((c)=>[c,c === "O" ? "○ (O)" : c === "X" ? "× (X)" : c])
+      : q.type === "matching" ? q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${choiceDisplayText(q,i,c)}`])
       : (item.choices || []).map((c)=>[c,c]);
-    const answer = options.length ? `<select onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:120px;"><option value="">정답 선택</option>${options.map(([v,t])=>`<option value="${escapeHtml(v)}" ${values[ri]===v?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>`
+    const answer = options.length ? answerCheckboxesHtml(q,idx,ri,"editor")
       : `<input value="${escapeHtml(values[ri] || "")}" placeholder="이 칸의 정답 (다른 표현은 |로 구분)" onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:180px;" />`;
-    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center;"><input value="${escapeHtml(item.label)}" aria-label="답칸 이름" onchange="currentExam.questions[${idx}].response_items[${ri}].label=this.value" style="width:105px;" />${answer}${q.type === "blanks" ? `<input value="${escapeHtml((item.choices || []).join(" | "))}" placeholder="선택지 (|로 구분, 비우면 직접 입력)" onchange="setBlankOptions(${idx},${ri},this.value)" style="flex:1;min-width:200px;" />` : ""}</div>`;
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center;"><input value="${escapeHtml(item.label)}" aria-label="답칸 이름" onchange="currentExam.questions[${idx}].response_items[${ri}].label=this.value" style="width:105px;" />${q.type==="blanks"?`<select aria-label="소문항 유형" onchange="setResponseItemType(${idx},${ri},this.value)">${[["sentence","문장형 · 검토"],["short","직접 입력"],["choice","객관식"],["ox","OX / T·F"]].map(([v,t])=>`<option value="${v}" ${(item.type || (item.choices?.length?"choice":"short"))===v?"selected":""}>${t}</option>`).join("")}</select>`:""}${answer}${q.type === "blanks" ? `<input value="${escapeHtml((item.choices || []).join(" | "))}" placeholder="선택지 (|로 구분, 비우면 직접 입력)" onchange="setBlankOptions(${idx},${ri},this.value)" style="flex:1;min-width:200px;" /><textarea rows="2" placeholder="꼬리문제 내용 (텍스트 문항에서 표시)" onchange="currentExam.questions[${idx}].response_items[${ri}].text=this.value" style="width:100%;">${escapeHtml(item.text || "")}</textarea>` : ""}</div>`;
   }).join("");
   return `<div style="padding:12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin:10px 0;"><strong>답칸과 정답</strong>
     ${q.type === "ox" ? `<select aria-label="판단 기호" onchange="setJudgmentMode(${idx},this.value)" style="margin-left:8px;"><option value="ox" ${q.choices[0]!=="T"?"selected":""}>○ / ×</option><option value="tf" ${q.choices[0]==="T"?"selected":""}>T / F</option></select>` : ""}
     ${rows}<button type="button" class="btn btn-light btn-sm" onclick="addResponseItem(${idx})">+ 답칸 추가</button> <button type="button" class="btn btn-light btn-sm" onclick="removeResponseItem(${idx})">- 마지막 답칸 삭제</button>
     ${q.response_items.length>1 ? `<label style="display:block;font-size:0.82rem;margin-top:8px;"><input type="checkbox" ${q.partial_credit?"checked":""} onchange="currentExam.questions[${idx}].partial_credit=this.checked" /> 답칸별 부분 점수 (문항 배점을 답칸 수로 나누어 채점)</label>` : ""}</div>`;
+}
+function setResponseItemType(idx,row,type) {
+  if(!["short","sentence","choice","ox"].includes(type))return;
+  const q=currentExam.questions[idx],item=q.response_items[row],values=responseValues(q);
+  item.type=type;values[row]="";
+  if(type==="ox")item.choices=["O","X"];
+  else if(type==="choice" && !item.choices?.length)item.choices=["보기 1","보기 2"];
+  else if(type==="short" || type==="sentence"){delete item.choices;delete item.choice_labels;}
+  q.answer=JSON.stringify(values);prepareQuestion(q,false);renderEditorQuestions();
 }
 
 function setResponseAnswer(idx, row, value) {
@@ -2863,7 +3033,7 @@ function applyTextGradingAll(idx) {
 }
 function gradingSettingsHtml(q,idx) {
   if(!hasTextResponses(q))return "";
-  if(q.type==="sentence")return `${sentenceModeHtml(q,idx)}<div style="padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">문장형은 정답 일치 여부와 관계없이 채점을 보류합니다. 참고 답안은 선택 사항입니다. 제출 후 결과 화면에서 영어 기본 문법·철자 확인 항목을 보고 교사가 점수를 확정합니다. 검사 결과로 점수를 자동 결정하지 않습니다.</div>`;
+  if(q.type==="sentence" || q.response_items?.some((item)=>item.type==="sentence"))return `${sentenceModeHtml(q,idx)}<div style="padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">문장형 또는 문장형 꼬리문제가 포함된 문항은 전체 채점을 보류합니다. 문장형 참고 답안은 선택 사항입니다. 제출 후 결과 화면에서 영어 기본 문법·철자 확인 항목을 보고 교사가 문항 점수를 확정합니다. 검사 결과로 점수를 자동 결정하지 않습니다.</div>`;
   const p=textGradingDefaults(q);q.text_grading={...p};
   return `${sentenceModeHtml(q,idx)}<details style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;background:#f8fafc;"><summary style="cursor:pointer;font-weight:700;">주관식 채점 설정</summary>
     <div style="display:flex;flex-wrap:wrap;gap:14px;margin:12px 0;">
@@ -2880,23 +3050,17 @@ function gradingSettingsHtml(q,idx) {
   </details>`;
 }
 function teacherAnswerInputsHtml(q,idx) {
-  const button=(value,label,selected,row=null)=>`<button type="button" class="ans-pill ${selected?"active":""}" data-pv-answer="${idx}-${row===null?'choice':row}" data-value="${escapeHtml(value)}" onclick="setPreviewAnswer(${idx},${escapeHtml(JSON.stringify(String(value)))},${row===null?'null':row})" aria-pressed="${selected}">${escapeHtml(label)}</button>`;
   if(q.type==="choice") {
-    const selected=String(q.answer || "").split(",");
-    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">${q.choices.map((c,i)=>button(String(i+1),`${optionLabel(q,i)}${imageQuestion(q)?"":" "+c}`,selected.includes(String(i+1)))).join("")}</div>`;
+    return `<div style="margin-top:12px;"><label><input type="checkbox" id="answer-multi-preview-${idx}" ${q.multi?"checked":""} onchange="setCheckboxMulti(${idx},this.checked)" /> 복수 정답</label>${answerCheckboxesHtml(q,idx,null,"preview")}</div>`;
   }
   if(q.type==="sentence")return `<textarea class="short-input" rows="3" style="width:100%;margin-top:12px;padding:10px;" placeholder="참고 답안 입력 (선택 사항, 학생에게는 표시되지 않음)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value)">${escapeHtml(q.answer || "")}</textarea>`;
   if(!isStructuredQuestion(q))return `<input class="short-input" style="width:100%;margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:8px;" value="${escapeHtml(q.answer || "")}" placeholder="학생과 같은 답칸에 정답 입력 (다른 인정 답안은 |로 구분)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value)" />`;
   const values=responseValues(q);
   return (q.response_items || []).map((item,ri)=>{
     let input;
-    if(q.type==="ox")input=q.choices.map((c)=>button(c,c==="O"?"○ (O)":c==="X"?"× (X)":c,values[ri]===c,ri)).join("");
-    else {
-      const options=q.type==="matching"?q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)}${imageQuestion(q)?"":" "+c}`]):(item.choices || []).map((c)=>[c,c]);
-      input=options.length?`<select style="padding:10px;max-width:100%;" onchange="setPreviewAnswer(${idx},this.value,${ri})"><option value="">정답 선택</option>${options.map(([v,t])=>`<option value="${escapeHtml(v)}" ${values[ri]===v?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>`
-        :`<input style="padding:10px;flex:1;min-width:150px;" value="${escapeHtml(values[ri] || "")}" placeholder="정답 입력 (다른 답안은 |)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value,${ri})" />`;
-    }
-    return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;"><strong>${escapeHtml(item.label || `답 ${ri+1}`)}</strong>${input}</div>`;
+    if(checkboxAnswerOptions(q,ri).length)input=answerCheckboxesHtml(q,idx,ri,"preview");
+    else input=`<input style="padding:10px;flex:1;min-width:150px;" value="${escapeHtml(values[ri] || "")}" placeholder="${item.type==="sentence"?"참고 답안 (선택)":"정답 입력 (다른 답안은 |)"}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value,${ri})" />`;
+    return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;"><strong>${escapeHtml(item.label || `답 ${ri+1}`)}</strong>${!imageQuestion(q) && item.text?`<div style="width:100%;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(contentLineBreaks(item.text))}</div>`:""}${input}</div>`;
   }).join("");
 }
 function setPreviewAnswer(idx,value,row=null) {
@@ -2936,13 +3100,12 @@ function renderEditorQuestions() {
     prepareQuestion(q,false);
     const isChoice = q.type === "choice";
     const structured = isStructuredQuestion(q);
-    const ansSet = new Set(String(q.answer || "").split(",").map((s) => s.trim()).filter(Boolean));
     const choiceBtns = isChoice
-      ? q.choices.map((_, ci) => `<button type="button" class="ans-pill ${ansSet.has(String(ci + 1)) ? "active" : ""}" onclick="setQAnswer(${idx}, '${ci + 1}')">${optionLabel(q,ci)}</button>`).join("")
+      ? answerCheckboxesHtml(q,idx,null,"editor")
       : structured ? `<span style="font-size:0.82rem;">아래 답칸별로 설정</span>` : `<input type="text" value="${escapeHtml(q.answer || "")}" placeholder="정답 (유사 답안은 | 로 구분)" onchange="setQAnswer(${idx}, this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;min-width:210px;" />`;
     const multiToggle = isChoice
       ? `<label style="font-size:0.8rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
-           <input type="checkbox" ${q.multi ? "checked" : ""} onchange="currentExam.questions[${idx}].multi=this.checked;renderEditorQuestions()" /> 복수정답
+           <input type="checkbox" id="answer-multi-editor-${idx}" ${q.multi ? "checked" : ""} onchange="setCheckboxMulti(${idx},this.checked)" /> 복수정답
          </label>`
       : "";
     const choicesHtml = (isChoice || q.type === "matching")
@@ -3379,8 +3542,8 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   creepLoadingProgress(85, "구글 시트에 시험지를 저장하고 있습니다");
   try {
     currentExam.questions.forEach((q)=>prepareQuestion(q,false));
-    if(currentExam.questions.some((q)=>isStructuredQuestion(q) || imageQuestion(q) || q.text_grading || q.type==="sentence" || q.choice_labels?.length)) {
-      const requiredSchema=currentExam.questions.some((q)=>q.choice_labels?.length)?6:currentExam.questions.some((q)=>q.type==="sentence")?5:currentExam.questions.some((q)=>q.text_grading)?4:currentExam.questions.some(imageQuestion)?3:2;
+    if(currentExam.questions.some((q)=>isStructuredQuestion(q) || imageQuestion(q) || q.text_grading || q.type==="sentence" || q.choice_labels?.length || q.response_items?.some((item)=>item.type))) {
+      const requiredSchema=currentExam.questions.some((q)=>q.response_items?.some((item)=>item.type))?7:currentExam.questions.some((q)=>q.choice_labels?.length)?6:currentExam.questions.some((q)=>q.type==="sentence")?5:currentExam.questions.some((q)=>q.text_grading)?4:currentExam.questions.some(imageQuestion)?3:2;
       const capabilities=await apiCall({action:"capabilities"});
       if(!capabilities.ok || Number(capabilities.question_schema || 0)<requiredSchema) {
         alert("원본 이미지와 주관식 채점 설정을 저장하려면 수정된 Code.gs를 Apps Script에 붙여넣고 기존 배포를 새 버전으로 업데이트해 주세요.");
@@ -3448,7 +3611,7 @@ async function deleteExam(examId) {
 function showQrForExam(examId, title, entryPin = "") {
   const baseViewer = getViewerUrl();
   const sep = baseViewer.includes("?") ? "&" : "?";
-  const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}&v=6`;
+  const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}&v=7`;
   document.getElementById("qrExamTitle").textContent = title;
   const pinBanner = document.getElementById("qrPinBanner");
   if (pinBanner) {
@@ -3519,19 +3682,19 @@ function renderPreviewModal(examObj) {
   if(isFromEditor)html+=`<div id="pvAnswerSummary" class="pv-card" style="background:#eff6ff;color:var(--navy);"></div>`;
   target.questions.forEach((q,idx) => {
     html += `<div class="pv-card"><div style="white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q.num)}.</strong>${escapeHtml(imageQuestion(q)?"":questionContent(q))}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
-    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">${q.images.map((u) => `<img src="${u}" style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
+    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:${imageQuestion(q)?"block":"flex"};flex-wrap:wrap;gap:8px;margin:8px 0;max-width:760px;">${q.images.map((u) => `<img src="${u}" style="${imageQuestion(q)?"display:block;width:100%;":""}max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
     if(isFromEditor) {
       html+=teacherAnswerInputsHtml(q,idx);
       html+=`<div style="margin-top:12px;"><label>이 문항 배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=Math.max(0.5,Number(this.value)||1)" style="width:70px;padding:6px;" /> 점</label></div>`;
       html+=gradingSettingsHtml(q,idx);
     } else if (isStructuredQuestion(q)) html += (q.response_items || []).map((item)=>{
-      const options=q.type==="ox"?q.choices:q.type==="matching"?q.choices.map((c,i)=>`${optionLabel(q,i)} ${imageQuestion(q) || c===CIRCLED[i]?"":c}`):(item.choices || []);
+      const options=q.type==="ox"?q.choices:q.type==="matching"?q.choices.map((c,i)=>`${optionLabel(q,i)} ${imageQuestion(q)?"":choiceDisplayText(q,i,c)}`):(item.choices || []);
       const input=q.type==="ox" ? `<div style="display:flex;gap:8px;">${options.map((c)=>`<button type="button" disabled style="padding:9px 16px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--navy);">${escapeHtml(c==="O"?"○ (O)":c==="X"?"× (X)":c)}</button>`).join("")}</div>`
         : options.length ? `<select disabled><option>선택하세요</option>${options.map((c)=>`<option>${escapeHtml(c)}</option>`).join("")}</select>` : `<input disabled placeholder="답 입력" />`;
       return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;"><strong>${escapeHtml(item.label)}</strong>${input}</div>`;
     }).join("");
     else if (["short","sentence"].includes(q.type)) html += `<div style="margin-top:8px;border:1.5px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--muted);font-size:0.9rem;">단답형 답안 입력란</div>`;
-    else if (mode !== "omr_pages") html += q.choices.map((c, ci) => `<div class="pv-choice"><b>${optionLabel(q,ci)}</b> ${escapeHtml(imageQuestion(q)?"":c)}</div>`).join("");
+    else if (mode !== "omr_pages") html += q.choices.map((c, ci) => `<div class="pv-choice"><b>${optionLabel(q,ci)}</b> ${escapeHtml(imageQuestion(q)?"":choiceDisplayText(q,ci,c))}</div>`).join("");
     html += `</div>`;
   });
   document.getElementById("previewBody").innerHTML = html;
