@@ -122,6 +122,8 @@
   .choices-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 8px; }
   .img-thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .img-thumbs img { height: 76px; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
+  .img-thumbs.original-images { display:block;max-width:760px; }
+  .img-thumbs.original-images img { display:block;width:100%;height:auto;border-radius:0; }
   .page-preview-strip { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; margin-bottom: 12px; }
   .page-preview-strip img { height: 150px; border: 1px solid var(--border); border-radius: 8px; }
   .review-summary { padding:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;margin:12px 0;line-height:1.7; }
@@ -206,14 +208,14 @@
           클릭하거나 .hwp / .hwpx / .pdf / 이미지 파일을 끌어다 놓으세요
         </div>
         <div style="font-size:0.84rem;color:var(--muted);">
-          설치 없이 브라우저에서 문항·보기·그림을 바로 분석합니다. (구형 .hwp는 첫 분석 시 HOP 한글 엔진을 1회 불러옵니다)
+          문제·지문·보기·그림을 원본 이미지로 가져오고 답안 입력란을 만듭니다. 설치나 유료 AI 연결 없이 브라우저에서 처리합니다.
         </div>
         <input id="fileInput" type="file" accept=".hwpx,.pdf,.png,.jpg,.jpeg,.webp,.hwp" multiple hidden />
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-top:12px;">
         <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer;">
           <input type="checkbox" id="forcePageMode" />
-          PDF / HWP를 원본 그림 그대로 띄우고 OMR 체크만 받기
+          문항별 이미지 대신 원본 페이지 전체 + 답안표 사용
         </label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button type="button" class="btn btn-light btn-sm" id="manualNewBtn">+ 빈 시험지 만들기</button>
@@ -236,7 +238,7 @@
       <h2 style="margin:0;">문항 및 정답 설정</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button type="button" class="btn btn-light btn-sm" id="closeEditorBtn">닫기</button>
-        <button type="button" class="btn btn-blue btn-sm" id="previewEditorBtn">👁 시험지 미리보기</button>
+        <button type="button" class="btn btn-blue btn-sm" id="previewEditorBtn">✍️ 학생 문제지에서 정답 입력</button>
         <button type="button" class="btn btn-green" id="saveAndQrBtn">☁️ 저장하고 QR 발급</button>
       </div>
     </div>
@@ -315,6 +317,7 @@
       <button type="button" class="btn btn-light btn-sm" id="allViewBtn" onclick="setEditorView('all')">전체 문항 편집</button>
       <button type="button" class="btn btn-light btn-sm" id="answerKeyPreviewBtn" style="display:none;" onclick="showAnswerKeyPreview()">정답지 원본 확인</button>
       <label style="font-size:0.84rem;align-self:center;"><input type="checkbox" id="showCompletedAnswers" onchange="renderEditorQuestions()" /> 완료한 정답도 보기</label>
+      <label style="font-size:0.84rem;align-self:center;">유형별 보기 <select id="recognitionFilter" onchange="setRecognitionFilter(this.value)"><option value="">전체 유형</option><option value="choice">선택형</option><option value="judgment">OX·참거짓</option><option value="matching">연결·짝짓기</option><option value="cloze">빈칸 완성</option><option value="summary">요약·표 완성</option><option value="ordering">순서·배열</option><option value="vocabulary">어휘</option><option value="reading">독해</option><option value="phonics">파닉스</option><option value="writing">문장 쓰기</option><option value="activity">활동형</option><option value="short_answer">단답</option></select></label>
     </div>
     <details id="importNotes" style="display:none;margin:8px 0;color:var(--muted);"></details>
     <div id="editorNotice" role="alert" style="display:none;padding:10px;color:#92400e;background:#fffbeb;border-radius:8px;margin:8px 0;"></div>
@@ -604,6 +607,43 @@ function extractInlineChoices(line) {
   return { prefix, found };
 }
 
+function optionLabel(q,index) { return q.choice_labels?.[index] || CIRCLED[index] || String(index+1); }
+function extractLetterChoices(line) {
+  const markers=[...line.matchAll(/(?:^|\s)(?:([A-Ha-h])[.)]\s+(?=\S)|([Ⓐ-Ⓗⓐ-ⓗ])\s*)/g)];
+  if(!markers.length || (markers.length===1 && markers[0].index>0))return [];
+  return markers.map((m,i)=>({index:m[1]?m[1].toUpperCase().charCodeAt(0)-65:(m[2].charCodeAt(0)-(m[2]>="ⓐ"?"ⓐ":"Ⓐ").charCodeAt(0)),label:m[1] || m[2],text:line.slice(m.index+m[0].length,markers[i+1]?.index ?? line.length).trim()}));
+}
+
+function worksheetTaskProfile(q) {
+  const text=questionContent(q), instruction=text.split("\n").slice(0,5).join(" ");
+  const match=(pattern)=>pattern.test(instruction);
+  let kind="short_answer",label="단답",confidence="medium";
+  if(/(?:색칠|오려|붙여|그려|따라\s*쓰|역할놀이|발표|말해\s*보|주어.{0,8}동사.{0,12}찾|\b(?:color|colour|draw|trace|cut\s+out|role.play|act\s+out|discuss|speak\s+with)\b)/i.test(text.split("\n")[0]) && !match(/draw\s+(?:a\s+)?line/i))return {version:1,kind:"activity",label:"그리기·말하기 등 활동",confidence:"review",review_reason:"활동형 과제입니다. 현재 답칸으로 응답할 수 있는지 확인하거나 해당 문항을 제외해 주세요."};
+  if(q.type==="ox"){kind="judgment";label="OX·참거짓";confidence="high";}
+  else if(q.type==="matching" || match(/연결|짝지|짝을|\bmatch(?:ing)?\b|draw\s+(?:a\s+)?line/i)){kind="matching";label="연결·짝짓기";confidence=q.choices.length>=2?"high":"review";}
+  else if(match(/순서|배열|\bunscramble\b|\b(?:correct|right)\s+order\b|\brearrange\b|\b(?:words?|sentences?)\b.*\border\b/i)){kind="ordering";label="순서·배열";confidence="high";}
+  else if(match(/요약|표를\s*완성|도표|summary|summarize|complete\s+(?:the\s+)?(?:table|chart|diagram)/i)){kind="summary";label="요약·표 완성";confidence="high";}
+  else if(match(/파닉스|첫\s*(?:글자|소리)|끝\s*소리|발음|phonics|first\s+(?:letter|sound)|beginning\s+sound|rhym/i)){kind="phonics";label="파닉스·소리";confidence="high";}
+  else if(match(/빈칸|빈\s*곳|빈\s*칸|fill\s+(?:in\s+)?(?:the\s+)?blanks?|complete\s+(?:each|the)\s+sentence/i)){kind="cloze";label="빈칸 완성";confidence="high";}
+  else if(match(/뜻|단어|낱말|어휘|vocabulary|meaning|word\s+bank/i)){kind="vocabulary";label="어휘";confidence="high";}
+  else if(match(/제목|중심\s*(?:내용|소재)|세부\s*내용|내용.*일치|글을\s*읽|이\s*글|윗글|passage|main\s+idea|title|according\s+to/i)){kind="reading";label="독해";confidence="high";}
+  else if(q.type==="sentence" || match(/문장|write\s+(?:a|the|your|two|three)\s+sentences?/i)){kind="writing";label="문장 쓰기";confidence="high";}
+  else if(q.type==="choice"){kind="choice";label="선택형";confidence="high";}
+  if(match(/듣고|대화를\s*듣|\blisten\b/i))label="듣기 · "+label;
+  const result={version:1,kind,label,confidence};
+  if(confidence==="review")result.review_reason="연결형 지시문은 찾았지만 연결 보기를 확정하지 못했습니다. 유형과 보기를 확인해 주세요.";
+  return result;
+}
+
+function worksheetPageRole(page) {
+  const items=page.items || [], text=items.map((it)=>it.str).join("\n"), top=items.filter((it)=>it.y0<page.height*.24).map((it)=>it.str).join("\n");
+  if(/(?:정답\s*(?:및|과|·|&)\s*해설|정답\s*모음|해답|Answer\s*Keys?|Answer\s*(?:and|&)\s*Explanations)/i.test(top))return "answers";
+  if(items.some((it)=>/^\s*Answers\s*$/i.test(it.str)) && text.length<800)return "answer_cover";
+  if(/(?:교사용\s*지도서|교수[·\s]*학습\s*과정안|수업\s*지도안|차시\s*학습\s*목표|Lesson\s*Plan)/i.test(top))return "teacher_guide";
+  return "student";
+}
+
+function imageQuestion(q) { return q.content_mode === "image" && Boolean(q.images?.length); }
 function questionContent(q) {
   const prompt = String(q.prompt || "").trim(), passage = String(q.passage || "").trim();
   return passage && !prompt.includes(passage) ? [prompt, passage].filter(Boolean).join("\n\n") : (prompt || passage);
@@ -640,13 +680,13 @@ function prepareQuestion(q, infer = false) {
   const labels = subpartLabels(responseText);
   const instruction = text.split("\n").slice(0, 4).join(" ");
   if (infer && !isStructuredQuestion(q)) {
-    const connection = /연결|(?:선|줄)을?\s*(?:긋|그어|이어)/.test(instruction);
+    const connection = /연결|(?:선|줄)을?\s*(?:긋|그어|이어)|\bmatch(?:ing)?\b|draw\s+(?:a\s+)?line/i.test(instruction);
     if(connection && !q.choices.length) {
-      const targets=[...text.matchAll(/(?:^|\n)\s*([A-Z가-하])[.)]\s+([^\n]+)/g)];
-      if(targets.length>=2)q.choices=targets.map((m)=>`${m[1]}. ${m[2].trim()}`);
+      const targets=[...text.matchAll(/(?:^|\n)\s*([A-Za-z가-하])[.)]\s+([^\n]+)/g)];
+      if(targets.length>=2){q.choices=targets.map((m)=>m[2].trim());q.choice_labels=targets.map((m)=>m[1]);}
     }
     const pair = q.choices.length === 2 && new Set(q.choices.map(judgmentValue)).size === 2 && q.choices.every((c)=>judgmentValue(c));
-    const tf = /\b(?:true\s*(?:or|\/)\s*false|T\s*\/\s*F)\b/i.test(instruction) || (/\bT\b[\s\S]*\bF\b/i.test(text) &&
+    const tf = /\b(?:true\s*(?:or|\/)\s*false|T\s*\/\s*F)\b/i.test(instruction) || (/\b(?:check|write|mark|tick|circle)\b/i.test(instruction) && /\btrue\b/i.test(instruction) && /\bfalse\b/i.test(instruction)) || (/\bT\b[\s\S]*\bF\b/i.test(text) &&
       (/일치|참|거짓|true|false/i.test(instruction) || /\bT\b\s*(?:또는|\/|,)\s*\bF\b/i.test(instruction)) && /일치|판단|고르|선택|표/.test(instruction));
     const ox = /[○◯〇⭕]/.test(text) && /[×☓✕✖❌]/.test(text) && /일치|옳|맞|판단|고르|선택|표/.test(instruction);
     const literalOX = (/(?:\bO\b|Ｏ)[\s,\/또는과와·]*(?:\bX\b|Ｘ)/i.test(instruction) && /일치|옳|맞|판단|문제|표|고르/.test(instruction)) || /\bO\s*[/·]?\s*X\s*(?:문제|퀴즈|표시|판단)/i.test(instruction) || (/\bO\s*(?:\/|or)\s*X\b/i.test(instruction) && /choose|circle|mark/i.test(instruction));
@@ -656,7 +696,8 @@ function prepareQuestion(q, infer = false) {
       const useTF=tf || (pair && oldChoices.every((c)=>/^[TF]$/i.test(String(c).trim())));
       q.type = "ox";
       q.choices = useTF ? ["T","F"] : ["O","X"];
-      q.response_items = (labels.length >= 2 ? labels : ["답"]).map((label)=>({label}));
+      const bareLabels=[...new Set([...responseText.matchAll(/(?:^|\n)\s*([a-zA-Z]|\d{1,2})\)\s+/g)].map((m)=>`${m[1]})`))];
+      q.response_items = (labels.length >= 2 ? labels : bareLabels.length>=2 ? bareLabels : ["답"]).map((label)=>({label}));
       if (oldAnswer && pair && /^\d$/.test(oldAnswer)) {
         const value = judgmentValue(oldChoices[Number(oldAnswer)-1]);
         q.answer = JSON.stringify([useTF ? (value === "O" ? "T" : "F") : value]);
@@ -665,16 +706,17 @@ function prepareQuestion(q, infer = false) {
       q.type = "matching";
       q.response_items = (labels.length ? labels : ["연결할 보기"]).map((label)=>({label}));
     } else {
-      const alternatives = [...responseText.matchAll(/\(\s*([^()/\n]{1,50}?)\s*\/\s*([^()/\n]{1,50}?)\s*\)/g)];
+      const ordering=/배열|순서.*문장|\bunscramble\b|\brearrange\b|\bwords?\b.*\border\b/i.test(instruction);
+      const alternatives = ordering?[]:[...responseText.matchAll(/\(([^()\n]{1,180}\/[^()\n]{1,180})\)/g)].map((m)=>m[1].split("/").map((s)=>s.trim())).filter((options)=>options.length>=2 && options.length<=8 && options.every((s)=>s && s.length<=50));
       const comparison = /[<＜]\s*(?:또는|와|과|\/|,)\s*[>＞]/.test(instruction) && /표시|쓰|넣|고르/.test(instruction);
       const blankCount = responseText.split("\n").filter((line)=>!/^\s*[_＿…]+\s*$/.test(line))
         .join("\n").match(/[_＿]{2,}|\(\s*\)/g)?.length || 0;
       if (comparison && q.type === "short") {
         q.type = "blanks";
         q.response_items = [{label:"비교 기호",choices:["<",">"]}];
-      } else if (alternatives.length >= 2 && !q._explicitChoices) {
+      } else if ((alternatives.length >= 2 || (alternatives.length===1 && alternatives[0].length>=3)) && !q._explicitChoices) {
         q.type = "blanks";
-        q.response_items = alternatives.map((m,i)=>({label:`빈칸 ${i+1}`,choices:[m[1].trim(),m[2].trim()]}));
+        q.response_items = alternatives.map((options,i)=>({label:`빈칸 ${i+1}`,choices:options}));
       } else if (q.type === "short" && (labels.length >= 2 || blankCount >= 2)) {
         q.type = "blanks";
         q.response_items = (labels.length >= 2 ? labels : Array.from({length:Math.min(blankCount,30)},(_,i)=>`빈칸 ${i+1}`)).map((label)=>({label}));
@@ -702,12 +744,14 @@ function prepareQuestion(q, infer = false) {
     }));
     q.partial_credit = Boolean(q.partial_credit);
   }
+  if(infer){q.recognition=worksheetTaskProfile(q);if(q.recognition.review_reason)q.recognition_review_reason=q.recognition.review_reason;}
   return q;
 }
 
 function prepareParsedExam(parsed) {
   parsed.questions.forEach((q)=>prepareQuestion(q,false));
   (parsed.variants || []).forEach((v)=>v.questions.forEach((q)=>prepareQuestion(q,false)));
+  for(const q of [...parsed.questions,...(parsed.variants || []).flatMap((v)=>v.questions)])if(!q.recognition){q.recognition=worksheetTaskProfile(q);if(q.recognition.review_reason)q.recognition_review_reason=q.recognition.review_reason;}
   return parsed;
 }
 
@@ -721,12 +765,19 @@ function bulkAnswerValue(q, text) {
       if(!key)throw new Error(`${q.num}번 OX/T·F 정답을 확인해 주세요.`);
       return q.choices[key==="O"?0:1];
     }
+    if(q.type==="matching")value=sourceChoiceValue(q,value);
     if(q.type==="matching" && (!/^\d+$/.test(value) || Number(value)<1 || Number(value)>q.choices.length))throw new Error(`${q.num}번 연결 보기 번호를 확인해 주세요.`);
     return value;
   }));
 }
+function sourceChoiceValue(q,value) {
+  const normalized=String(value).normalize("NFKC").trim().toLowerCase();
+  const index=(q.choice_labels || []).findIndex((label)=>String(label).normalize("NFKC").trim().toLowerCase()===normalized);
+  return index>=0?String(index+1):String(value);
+}
 
 function answerIsComplete(q) {
+  if(q.type==="sentence")return true;
   if(isStructuredQuestion(q)) {
     const values=responseValues(q);
     return Boolean(q.response_items?.length) && values.length===q.response_items.length && values.every((value,i)=>{
@@ -745,11 +796,14 @@ function answerIsComplete(q) {
 
 function questionReviewReasons(q) {
   const reasons=[];
+  if(q.recognition_review_reason)reasons.push(q.recognition_review_reason);
+  if(q.image_review_reason)reasons.push(q.image_review_reason);
+  if(q.content_mode==="image" && !q.images?.length)reasons.push("원본 문항 이미지 필요");
   const text=questionContent(q);
   if(!q.images?.length && (!text || /^(?:\d+번\s*(?:문항|문제)\s*$|문항 내용을 확인|원본을 보고 문항)/.test(text)))reasons.push("문제 내용 확인");
   if(q.type==="choice" && q.choices.length<2)reasons.push("보기 확인");
   if(isStructuredQuestion(q) && !q.response_items?.length)reasons.push("답칸 확인");
-  if(/[\uE000-\uF8FF]/.test(text))reasons.push("추출되지 않은 글자 확인");
+  if(!imageQuestion(q) && /[\uE000-\uF8FF]/.test(text))reasons.push("추출되지 않은 글자 확인");
   return reasons;
 }
 
@@ -778,6 +832,7 @@ function numberedAnswerEntries(text) {
 function answerFromText(q, text) {
   let value=String(text).trim().replace(/^(?:정답|답)\s*[:：]\s*/,"");
   if(q.type==="choice") {
+    if(q.choice_labels?.length)value=value.split(/[,/\s]+/).filter(Boolean).map((v)=>sourceChoiceValue(q,v)).join(",");
     value=value.replace(/[①-⑳]/g,(c)=>String(c.charCodeAt(0)-0x2460+1)+(q.multi?",":""));
     if(q.multi)value=value.split(/[,/\s]+/).filter(Boolean).join(",");
     if(!answerIsComplete({...q,answer:value}))throw new Error(`${q.num}번 보기 번호를 확인해 주세요.`);
@@ -800,7 +855,7 @@ function planAnswerUpdates(questions,text) {
 }
 
 function splitBlocksToQuestions(blocks) {
-  const qStartRe = /^\s*(?:(?:문(?:제)?\s*)?(\d{1,3})\s*[.)\]:：]|(\d{1,3})\s*번(?=\s|[.)]|$)(?:\s*[.)])?|(\d{1,3})[ \t]+)\s*(.*)$/;
+  const qStartRe = /^\s*(?:(?:(?:문(?:제)?|Q(?:uestion)?)\s*)?\[?(\d{1,3})\s*[.)\]:：]|(\d{1,3})\s*번(?=\s|[.)]|$)(?:\s*[.)])?|(\d{1,3})[ \t]+)\s*(.*)$/i;
   const groupRe = /^\s*\[\s*(\d{1,3})\s*[~～\-–]\s*(\d{1,3})\s*\]\s*(.*)$/;
   const slashRe = /\(\s*([^()/]{2,60}?)\s*\/\s*([^()/]{2,60}?)\s*\)/;
 
@@ -871,11 +926,13 @@ function splitBlocksToQuestions(blocks) {
       _explicitChoices: keys.length > 0,
       _localContent: `${current.prompt}\n${current.passageLines.join("\n")}`,
     };
+    if(current._choiceLabels)question.choice_labels=choices.map((_,i)=>current._choiceLabels[i] || CIRCLED[i] || String(i+1));
     questions.push(question);
-    if (grp && /연결/.test(`${grp.prompt} ${grp.passageLines.join(" ")}`)) {
-      if (!grp.members) { grp.members = []; grp.choiceMap = {}; grp.figureUrls = []; }
+    if (grp && /연결|\bmatch\b|draw\s+(?:a\s+)?line/i.test(`${grp.prompt} ${grp.passageLines.join(" ")}`)) {
+      if (!grp.members) { grp.members = []; grp.choiceMap = {}; grp.choiceLabels = {}; grp.figureUrls = []; }
       grp.members.push(question);
       Object.assign(grp.choiceMap, current._choicesMap);
+      Object.assign(grp.choiceLabels, current._choiceLabels || {});
       mergedImgs.forEach((u) => { if (!grp.figureUrls.includes(u)) grp.figureUrls.push(u); });
       matchingGroups.add(grp);
     }
@@ -959,6 +1016,14 @@ function splitBlocksToQuestions(blocks) {
         continue;
       }
       if (!current) continue;
+      const letterChoices=extractLetterChoices(line);
+      const judgmentContext=/\btrue\b|\bfalse\b|참.*거짓|일치.*(?:O|○|T)/i.test([current.prompt,...current.passageLines].join(" "));
+      if(letterChoices.length && judgmentContext) {current.passageLines.push(line);continue;}
+      if(letterChoices.length) {
+        current._choiceLabels ||= {};
+        letterChoices.forEach((choice)=>{current._choicesMap[choice.index]=choice.text;current._choiceLabels[choice.index]=choice.label;});
+        continue;
+      }
 
       // In O/X and T/F tasks, (1), (2) label separate answer blanks,
       // not alternative answers to one multiple-choice question.
@@ -967,7 +1032,7 @@ function splitBlocksToQuestions(blocks) {
         current.passageLines.push(line);
         continue;
       }
-      if (/^\([1-9]\)/.test(line) && /빈칸|빈 곳|완성|채우|쓰세요|연결|(?:선|줄)을?\s*(?:긋|그어|이어)/.test(questionContext)) {
+      if (/^\([1-9]\)/.test(line) && /빈칸|빈 곳|완성|채우|쓰세요|연결|(?:선|줄)을?\s*(?:긋|그어|이어)|\b(?:match|fill|complete|write|connect)\b/i.test(questionContext)) {
         current.passageLines.push(line);
         continue;
       }
@@ -993,7 +1058,7 @@ function splitBlocksToQuestions(blocks) {
     const keys = Object.keys(grp.choiceMap).map(Number);
     if (!keys.length) return;
     const choices = Array.from({ length: Math.max(...keys) + 1 }, (_, i) => grp.choiceMap[i] || CIRCLED[i]);
-    grp.members.forEach((q) => { q.type = "choice"; q.choices = [...choices]; q.images = [...grp.figureUrls]; });
+    grp.members.forEach((q) => { q.type = "choice"; q.choices = [...choices]; q.images = [...grp.figureUrls];if(Object.keys(grp.choiceLabels).length)q.choice_labels=choices.map((_,i)=>grp.choiceLabels[i] || CIRCLED[i] || String(i+1)); });
   });
   questions.forEach((q)=>prepareQuestion(q,true));
 
@@ -1127,6 +1192,7 @@ function detectFrequencyGraph(docs, blocks) {
 function tableQuizVariants(docs, imgMap, blocks = []) {
   const variants = [];
   const signatures = new Set();
+  let wordTableOrdinal = -1;
   const tables = docs.flatMap((doc) => xmlElements(doc, "tbl"));
   const writingInstruction = blocks.find((b)=>b.type === "text" && /문장의\s*첫.*대문자/.test(b.text))?.text || "";
   const textOf = (node) => xmlElements(node, "p").map((p) => xmlElements(p, "t").map((t) => t.textContent).join("")).join("\n").trim();
@@ -1137,6 +1203,7 @@ function tableQuizVariants(docs, imgMap, blocks = []) {
   for (let ti = 0; ti < tables.length; ti++) {
     const table = tables[ti];
     if (!isWordTable(table)) continue;
+    wordTableOrdinal++;
     const title = xmlElements(table, "t").map((t)=>t.textContent.trim()).find((s)=>/Test\s*\(/i.test(s));
     const questions = [];
     for (const row of Array.from(table.childNodes).filter((n)=>n.localName === "tr")) {
@@ -1171,7 +1238,7 @@ function tableQuizVariants(docs, imgMap, blocks = []) {
     const signature = JSON.stringify({title,questions});
     if (!signatures.has(signature)) {
       signatures.add(signature);
-      variants.push({title,questions});
+      variants.push({title,questions,source_word_table:wordTableOrdinal});
     }
   }
   const counts = new Map();
@@ -1184,7 +1251,7 @@ function tableQuizVariants(docs, imgMap, blocks = []) {
   return variants;
 }
 
-async function parseHwpxFile(file) {
+async function parseHwpxStructure(file) {
   const zip = await JSZip.loadAsync(file);
   const imgMap = {};
   const entries = Object.keys(zip.files);
@@ -1249,6 +1316,10 @@ async function parseHwpxFile(file) {
     graph_task: detectFrequencyGraph(sectionDocs, blocks),
     warnings: detected_count ? questionParseWarnings(questions) : ["문항 번호를 찾지 못했습니다. 추출된 내용을 직접 나누고 편집해 주세요."],
   };
+}
+
+async function parseHwpxFile(file, forcePageMode = false) {
+  return parseHwpFile(file, forcePageMode);
 }
 
 async function extractPdfImageRects(page, viewport, scale) {
@@ -1459,7 +1530,9 @@ async function parseSectionWorksheet(pages, pageImages, name, forcePageMode) {
       const key=answerKey.get(`${sec.section}:${task.localNum}`);
       questions.push({ num: questions.length + 1, type: "short", multi: false,
         prompt: `${sec.section}-${task.localNum}. 원본 문항을 보고 답하세요.`, passage: "",
-        images: [headerImage, questionImage], choices: [], answer: key?.answer || "", points: sec.points, explain: "",
+        images: [headerImage, questionImage], content_mode:"image", source_label:`${sec.section}-${task.localNum}`,
+        source_regions:[{page:sec.page,rect:sec.header,role:"shared"},{page:sec.page,rect:task.rect,role:"question"}],
+        choices: [], answer: key?.answer || "", points: sec.points, explain: "",
         ...(key?{answer_source:{kind:"appendix",page:key.page,section:sec.section,number:task.localNum}}:{}) });
     }
   }
@@ -1471,17 +1544,357 @@ async function parseSectionWorksheet(pages, pageImages, name, forcePageMode) {
       ...(plan.excludedPages.length ? [`앞 구역이 반복되는 ${plan.excludedPages.join(", ")}쪽은 정답·해설 부록으로 판단해 제외했습니다. 배포 전 페이지 미리보기를 확인해 주세요.`] : [])] };
 }
 
+function originalMarker(text,numbers) {
+  const group=/^\s*\[\s*(\d{1,3})\s*[~～\-–]\s*(\d{1,3})\s*\]/.exec(text);
+  if(group && Number(group[1])<=Number(group[2]) && numbers.some((n)=>n>=Number(group[1]) && n<=Number(group[2])))return {kind:"shared",start:Number(group[1]),end:Number(group[2])};
+  const q=/^\s*(?:(?:(?:문(?:제)?|Q(?:uestion)?)\s*)?\[?(\d{1,3})\s*[.)\]:：]|(\d{1,3})\s*번(?=\s|[.)]|$)|(\d{1,3})\s+)(.*)$/i.exec(text);
+  if(!q)return null;
+  const number=Number(q[1]||q[2]||q[3]);
+  if(!numbers.includes(number) || (q[3] && !/^0/.test(q[3]) && (!/[가-힣A-Za-z]/.test(q[4]) || /^학년/.test(q[4]))))return null;
+  return {kind:"question",number};
+}
+
+function originalPanelPlan(panels,numbers) {
+  const own=new Map(numbers.map((n)=>[n,[]])), shared=[];
+  let owner=null;
+  const seen=new Set();
+  function add(owner,panel,y0,y1) {
+    if(!owner || y1-y0<5)return;
+    const region={page:panel.page,rect:panel.fullBand || {x:panel.x0,y:y0,width:panel.x1-panel.x0,height:y1-y0},role:owner.kind};
+    if(owner.kind==="shared")shared.push({...region,start:owner.start,end:owner.end});
+    else own.get(owner.number)?.push(region);
+  }
+  for(const panel of panels) {
+    const markers=panel.lines.map((line)=>({...line,marker:originalMarker(line.text,numbers)})).filter((line)=>line.marker)
+      .sort((a,b)=>a.y0-b.y0);
+    const first=markers[0];
+    const prefix=panel.lines.some((line)=>line.y0>=panel.y0 && line.y0<(first?.y0 ?? panel.y1)-4 && !/초등학교|학년.*이름|^\s*\d+\s*$/.test(line.text));
+    if(prefix)add(owner || first?.marker,panel,panel.y0,first ? Math.max(panel.y0,first.y0-4) : panel.y1);
+    for(let i=0;i<markers.length;i++) {
+      const line=markers[i], marker=line.marker;
+      if(marker.kind==="question" && seen.has(marker.number))continue;
+      if(marker.kind==="question")seen.add(marker.number);
+      owner=marker;
+      add(owner,panel,Math.max(panel.y0,line.y0-4),Math.max(panel.y0,markers[i+1] ? markers[i+1].y0-4 : panel.y1));
+    }
+  }
+  return numbers.map((number)=>({number,regions:[...shared.filter((r)=>number>=r.start&&number<=r.end),...(own.get(number)||[])]}));
+}
+
+function panelsFromLines(page,lines,cols,bands=[]) {
+  const panels=[];
+  for(const [x0,x1] of cols) {
+    const own=lines.filter((line)=>line.x>=x0 && line.x<x1);
+    const splits=bands.filter((b)=>b.x0===x0).sort((a,b)=>a.y0-b.y0);
+    let y=page.contentTop ?? page.height*.055;
+    const add=(left,right,top,bottom,side=null)=>{
+      if(bottom-top<6)return;
+      panels.push({page:page.number,x0:left,x1:right,y0:top,y1:bottom,
+        ...(side?{fullBand:{x:x0,y:top,width:x1-x0,height:bottom-top}}:{}),
+        lines:own.filter((line)=>line.y0>=top-1 && line.y0<bottom && (!side || (line.subSide||"L")===side))});
+    };
+    for(const band of splits) {
+      add(x0,x1,y,band.y0-4);
+      add(x0,band.splitX,band.y0-4,band.y1,"L");
+      add(band.splitX,x1,band.y0-4,band.y1,"R");
+      y=band.y1;
+    }
+    add(x0,x1,y,page.height*.95);
+  }
+  return panels;
+}
+
+function completeMatchingSource(plans,questions) {
+  for(const q of questions.filter((q)=>q.type==="matching")) {
+    const plan=plans.find((p)=>p.number===q.num);
+    const ranges=(plan?.regions || []).filter((r)=>r.role==="shared" && r.start && r.end);
+    if(!ranges.length)continue;
+    const regions=ranges.flatMap((range)=>plans.filter((p)=>p.number>=range.start && p.number<=range.end).flatMap((p)=>p.regions));
+    plan.regions=[...new Map(regions.map((r)=>[JSON.stringify(r),r])).values()];
+  }
+  return plans;
+}
+
+async function applyOriginalPdf(questions,pages,panels,pageImages) {
+  let plans;
+  if(questions.some((q)=>q.source_page)) {
+    plans=[];
+    for(const sourcePage of new Set(questions.map((q)=>q.source_page))) {
+      const pageQuestions=questions.filter((q)=>q.source_page===sourcePage);
+      const pagePanels=scopedWorksheetPanels(panels.filter((p)=>p.page===sourcePage));
+      for(const section of new Set(pageQuestions.map((q)=>q.source_section))) {
+      const local=pageQuestions.filter((q)=>q.source_section===section);
+      const sectionPanels=pagePanels.filter((p)=>!section || p.source_section===section);
+      const localPlans=originalPanelPlan(sectionPanels,local.map((q)=>q.source_local_num));
+      if(section) {
+        const first=sectionPanels.find((p)=>p.lines.some((l)=>worksheetSectionHeading(l.text)));
+        const marker=first?.lines.find((l)=>originalMarker(l.text,local.map((q)=>q.source_local_num)));
+        if(first && marker && marker.y0-first.y0>8) {
+          const header={page:sourcePage,role:"shared",rect:{x:first.x0,y:first.y0,width:first.x1-first.x0,height:marker.y0-4-first.y0}};
+          for(const plan of localPlans){plan.regions=plan.regions.filter((r)=>JSON.stringify(r.rect)!==JSON.stringify(header.rect));plan.regions.unshift(header);}
+        }
+      }
+      for(const plan of localPlans) {
+        const q=local.find((q)=>q.source_local_num===plan.number);
+        plan.number=q.num;
+        plan.regions=plan.regions.map((r)=>({...r,...(r.start?{start:local.find((q)=>q.source_local_num===r.start)?.num ?? q.num,end:local.find((q)=>q.source_local_num===r.end)?.num ?? q.num}:{})}));
+        plans.push(plan);
+      }
+      }
+    }
+  } else plans=originalPanelPlan(panels,questions.map((q)=>q.num));
+  plans=completeMatchingSource(plans,questions);
+  const cached=new Map();
+  for(const q of questions) {
+    const regions=plans.find((plan)=>plan.number===q.num)?.regions || [];
+    const slots=numberedWorksheetSlots(q,regions,pages);
+    if(slots.length && !String(q.answer || "").trim()) {
+      q.type="blanks";q.response_items=slots.map((label)=>({label:`빈칸 ${label}`}));prepareQuestion(q,false);
+    }
+    const firstPage=regions.find((r)=>r.role==="question")?.page;
+    const previous=firstPage>1?pages[firstPage-2]:null;
+    if(previous && (!previous.worksheet_role || previous.worksheet_role==="student") && /이\s*글|윗글|위\s*글|passage|according\s+to|the\s+text/i.test(q.prompt) &&
+      !plans.some((plan)=>plan.regions.some((r)=>r.page===firstPage-1 && r.role==="question")) && previous.items.map((it)=>it.str).join(" ").replace(/[^A-Za-z]/g,"").length>100) {
+      regions.unshift({page:firstPage-1,role:"shared",rect:{x:previous.width*.035,y:previous.height*.04,width:previous.width*.93,height:previous.height*.91}});
+    }
+    const images=[];
+    for(const region of regions) {
+      const key=JSON.stringify(region);
+      if(!cached.has(key))cached.set(key,await cropCanvasRegion(pages[region.page-1].canvas,region.rect));
+      images.push(cached.get(key));
+    }
+    q.content_mode="image";q.source_label=q.source_label || String(q.num);
+    q.source_regions=regions;
+    q.images=images.length?images:[...(pageImages || [])];
+    if(!images.length && questions.length>1)q.image_review_reason="문항 위치를 확인하지 못해 원본 페이지 전체를 표시했습니다. 필요한 영역을 오려 넣어 주세요.";
+  }
+}
+
+function numberedWorksheetSlots(q,regions,pages) {
+  if(q.type!=="short" || !["cloze","summary"].includes(q.recognition?.kind))return [];
+  const items=regions.filter((r)=>r.role==="question").flatMap((region)=>(pages[region.page-1]?.items || []).filter((it)=>it.x0>=region.rect.x && it.x0<region.rect.x+region.rect.width && it.y0>=region.rect.y && it.y1<region.rect.y+region.rect.height));
+  const sizes=items.filter((it)=>/[A-Za-z가-힣]{2,}/.test(it.str)).map((it)=>it.h).filter(Number.isFinite).sort((a,b)=>a-b);
+  const median=sizes[Math.floor(sizes.length/2)];if(!median)return [];
+  const marks=[...new Set(items.filter((it)=>it.h<median*.8 && /^(?:[1-9]|[12]\d|30|[a-z])$/.test(it.str.trim())).map((it)=>it.str.trim()))];
+  const numeric=marks.filter((m)=>/^\d+$/.test(m)).sort((a,b)=>Number(a)-Number(b));
+  if(numeric.length>=2 && numeric.every((n,i)=>Number(n)===i+1))return numeric;
+  const letters=marks.filter((m)=>/^[a-z]$/.test(m)).sort();
+  return letters.length>=2 && letters.every((n,i)=>n.charCodeAt(0)===97+i)?letters:[];
+}
+
+function svgPageInfo(svg,number,rawLayout) {
+  const root=new DOMParser().parseFromString(svg,"image/svg+xml").documentElement;
+  const view=(root.getAttribute("viewBox") || "").split(/[ ,]+/).map(Number);
+  let layout={};
+  try {layout=typeof rawLayout==="string"?JSON.parse(rawLayout):rawLayout || {};}catch(_){}
+  return {number,svg,width:view[2] || parseFloat(root.getAttribute("width")),height:view[3] || parseFloat(root.getAttribute("height")),
+    runs:(layout.runs || []).map((r)=>({...r,page:number})),
+    items:(layout.runs || []).map((r)=>({str:r.displayText || r.text,x0:r.x,x1:r.x+r.w,y0:r.y,y1:r.y+r.h,yBase:r.y+r.h*.85,h:r.h,model:r}))};
+}
+
+function hwpOriginalPanels(pages,numbers) {
+  const panels=[];
+  for(const page of pages) {
+    const roots=page.runs.filter((r)=>r.parentParaIdx===undefined && /^\s*\d{1,3}[.)\s]/.test(r.text));
+    const two=roots.some((r)=>r.x<page.width*.4) && roots.some((r)=>r.x>page.width*.5);
+    const cols=two?[[page.width*.035,page.width*.5],[page.width*.5,page.width*.97]]:[[page.width*.035,page.width*.97]];
+    const lines=[];
+    for(const [x0,x1] of cols) {
+      const rows=[];
+      const items=page.items.filter((it)=>(it.x0+it.x1)/2>=x0 && (it.x0+it.x1)/2<x1).sort((a,b)=>a.yBase-b.yBase || a.x0-b.x0);
+      for(const item of items) {
+        let row=rows.find((r)=>Math.abs(r.yBase-item.yBase)<Math.max(3,item.h*.25));
+        if(!row){row={yBase:item.yBase,y0:item.y0,y1:item.y1,items:[]};rows.push(row);}
+        row.items.push(item);row.y0=Math.min(row.y0,item.y0);row.y1=Math.max(row.y1,item.y1);
+      }
+      for(const row of rows)lines.push({x:x0+1,y0:row.y0,y1:row.y1,text:joinPdfLineItems(row.items.sort((a,b)=>a.x0-b.x0),1)});
+    }
+    panels.push(...panelsFromLines({...page,contentTop:0},lines,cols));
+  }
+  return panels;
+}
+
+function unionSourceRects(rects,pad=2) {
+  if(!rects.length)return null;
+  const x=Math.min(...rects.map((r)=>r.x)),y=Math.min(...rects.map((r)=>r.y));
+  return {x:Math.max(0,x-pad),y:Math.max(0,y-pad),width:Math.max(...rects.map((r)=>r.x+(r.w ?? r.width)))-x+pad*2,height:Math.max(...rects.map((r)=>r.y+(r.h ?? r.height)))-y+pad*2};
+}
+
+function cropSvgSource(svg,rect) {
+  const xml=new DOMParser().parseFromString(svg,"image/svg+xml"),root=xml.documentElement;
+  const view=(root.getAttribute("viewBox") || "").split(/[ ,]+/).map(Number);
+  const width=view[2] || parseFloat(root.getAttribute("width")),height=view[3] || parseFloat(root.getAttribute("height"));
+  const x=Math.max(0,rect.x),y=Math.max(0,rect.y),w=Math.min(rect.width,width-x),h=Math.min(rect.height,height-y);
+  if(w<4 || h<4)throw new Error("원본 문항 영역이 페이지를 벗어났습니다.");
+  root.setAttribute("viewBox",`${x} ${y} ${w} ${h}`);root.setAttribute("width",String(w));root.setAttribute("height",String(h));
+  return new XMLSerializer().serializeToString(xml);
+}
+
+async function applyOriginalHwp(doc,parsed,pages,pageImages) {
+  const cache=new Map();
+  const render=async(region)=>{
+    const key=JSON.stringify(region);
+    if(!cache.has(key)) {
+      const page=pages[region.page-1];
+      const image=await renderSvgToDataUrl(cropSvgSource(page.svg,region.rect),1100);
+      if(!image)throw new Error("원본 문항 그림을 만들지 못했습니다. PDF로 저장해 다시 올려 주세요.");
+      cache.set(key,image);
+    }
+    return cache.get(key);
+  };
+  const set=async(q,regions)=>{
+    q.content_mode="image";q.source_label=q.source_label || String(q.num);q.source_regions=regions;
+    q.images=[];
+    for(const region of regions)q.images.push(await render(region));
+    if(!q.images.length) {
+      q.images=[...pageImages];
+      if(parsed.questions.length>1)q.image_review_reason="문항 위치를 확인하지 못해 원본 페이지 전체를 표시했습니다. 필요한 영역을 오려 넣어 주세요.";
+    }
+  };
+  if(parsed.variants?.length && typeof doc.getTableCellBboxesAtPage==="function") {
+    const groups=new Map();
+    for(const page of pages)for(const run of page.runs) {
+      if(run.parentParaIdx===undefined || run.controlIdx===undefined)continue;
+      const key=`${run.secIdx}:${run.parentParaIdx}:${run.controlIdx}`;
+      if(!groups.has(key))groups.set(key,{ref:[run.secIdx,run.parentParaIdx,run.controlIdx],runs:[]});
+      groups.get(key).runs.push(run);
+    }
+    const compare=(a,b)=>a[0]-b[0] || a[1]-b[1] || a[2]-b[2];
+    const words=[...groups.values()].filter((g)=>{
+      const text=g.runs.map((r)=>r.text).join(" ");
+      return /Test\s*\(/i.test(text) && /영어/.test(text) && /한국어/.test(text) && /No\./i.test(text);
+    }).sort((a,b)=>compare(a.ref,b.ref));
+    const boxes=new Map();
+    const cells=(ref,page)=>{
+      const key=`${ref.join(":")}:${page}`;
+      if(!boxes.has(key)){try{boxes.set(key,JSON.parse(doc.getTableCellBboxesAtPage(...ref,page-1)));}catch(_){boxes.set(key,[]);}}
+      return boxes.get(key);
+    };
+    for(const variant of parsed.variants) {
+      const ordinal=variant.source_word_table ?? 0,group=words[ordinal],next=words[ordinal+1];
+      for(const q of variant.questions) {
+        const regions=[];
+        if(group) {
+          const numeric=group.runs.find((r)=>r.text.trim()===String(q.num) && cells(group.ref,r.page).some((c)=>c.cellIdx===r.cellIdx && c.row>=2 && c.col%3===0));
+          if(numeric) {
+            const all=cells(group.ref,numeric.page),numberCell=all.find((c)=>c.cellIdx===numeric.cellIdx);
+            if(numberCell) {
+              const col=Math.floor(numberCell.col/3)*3;
+              const own=all.filter((c)=>c.row===numberCell.row && c.col>=col && c.col<col+3);
+              const head=all.filter((c)=>c.row===1 && c.col>=col && c.col<col+3 && c.colSpan<=3);
+              const header=unionSourceRects(head),row=unionSourceRects(own);
+              if(header)regions.push({page:numeric.page,rect:header,role:"shared"});
+              if(row)regions.push({page:numeric.page,rect:row,role:"question"});
+            }
+          } else {
+            const writing=[...groups.values()].filter((g)=>compare(g.ref,group.ref)>0 && (!next || compare(g.ref,next.ref)<0));
+            for(const table of writing) {
+              const run=table.runs.find((r)=>new RegExp(`^\\s*${q.num}\\s*[.)]`).test(r.text));
+              if(!run)continue;
+              const all=cells(table.ref,run.page),cell=all.find((c)=>c.cellIdx===run.cellIdx);
+              if(cell) {
+                const wordRect=unionSourceRects(cells(group.ref,run.page),0),writeRect=unionSourceRects(all,0);
+                if(wordRect && writeRect && writeRect.y>wordRect.y+wordRect.height+4)regions.push({page:run.page,role:"shared",rect:{x:writeRect.x,y:wordRect.y+wordRect.height,width:writeRect.width,height:writeRect.y-wordRect.y-wordRect.height}});
+                regions.push({page:run.page,rect:unionSourceRects([cell]),role:"question"});
+              }
+              break;
+            }
+          }
+        }
+        await set(q,regions);
+      }
+      const used=[...new Set(variant.questions.flatMap((q)=>q.source_regions.map((r)=>r.page)))];
+      variant.page_images=used.length?used.map((n)=>pageImages[n-1]):pageImages;
+    }
+    parsed.questions=parsed.variants[0].questions;
+    parsed.page_images=parsed.variants[0].page_images;
+    return;
+  }
+  const plans=completeMatchingSource(originalPanelPlan(hwpOriginalPanels(pages,parsed.questions.map((q)=>q.num)),parsed.questions.map((q)=>q.num)),parsed.questions);
+  for(const q of parsed.questions)await set(q,plans.find((p)=>p.number===q.num)?.regions || []);
+}
+
+function repeatedWorksheetQuestions(pageBlocks) {
+  const pages=[...new Set(pageBlocks.map((b)=>b.source_page).filter(Boolean))];
+  const parsed=pages.map((page)=>({page,...splitScopedWorksheetBlocks(pageBlocks.filter((b)=>b.source_page===page))}));
+  const sets=parsed.filter((p)=>p.detected_count>=2 && p.questions[0].num===1);
+  if(sets.length<2 && !parsed.some((p)=>p.scoped))return null;
+  const questions=[];
+  for(const entry of parsed) {
+    if(entry.detected_count<1)continue;
+    for(const q of entry.questions) {
+      q.source_local_num=q.source_local_num || q.num;q.source_page=entry.page;q.source_label=`${entry.page}쪽 ${q.source_section?`${q.source_section}-`:""}${q.source_local_num}번`;
+      q.num=questions.length+1;questions.push(q);
+    }
+  }
+  return {questions,detected_count:questions.length};
+}
+
+function worksheetSectionHeading(line) {
+  const m=/^\s*([A-H])[.)]?\s+(.{4,})$/u.exec(line);
+  return m && /쓰|완성|채우|연결|배열|고르|뜻|찾|\b(?:choose|write|complete|match|read|fill|put|unscramble|circle|check)\b/i.test(m[2]) ? {label:m[1],instruction:m[2]} : null;
+}
+function splitScopedWorksheetBlocks(blocks) {
+  const chunks=[];let current={heading:null,blocks:[]};
+  for(const block of blocks) {
+    if(block.type!=="text"){current.blocks.push(block);continue;}
+    for(const line of block.text.split("\n")) {
+      const heading=worksheetSectionHeading(line);
+      if(heading){chunks.push(current);current={heading,blocks:[]};}
+      else current.blocks.push({...block,text:line});
+    }
+  }
+  chunks.push(current);
+  if(chunks.filter((c)=>c.heading).length<2)return splitBlocksToQuestions(blocks);
+  const questions=[];
+  for(const chunk of chunks) {
+    const parsed=splitBlocksToQuestions(chunk.blocks);
+    if(!parsed.detected_count)continue;
+    for(const q of parsed.questions) {
+      if(chunk.heading){q.source_section=chunk.heading.label;q.prompt=chunk.heading.instruction+"\n"+q.prompt;prepareQuestion(q,true);}
+      q.source_local_num=q.num;q.num=questions.length+1;questions.push(q);
+    }
+  }
+  return {questions,detected_count:questions.length,scoped:true};
+}
+function scopedWorksheetPanels(panels) {
+  const out=[];let section=null;
+  for(const panel of panels) {
+    const headers=panel.lines.map((l)=>({...l,heading:worksheetSectionHeading(l.text)})).filter((l)=>l.heading).sort((a,b)=>a.y0-b.y0);
+    let top=panel.y0;
+    for(const h of headers) {
+      if(h.y0-top>5)out.push({...panel,y0:top,y1:h.y0-2,source_section:section,lines:panel.lines.filter((l)=>l.y0>=top && l.y0<h.y0-2)});
+      section=h.heading.label;top=h.y0-2;
+    }
+    out.push({...panel,y0:top,source_section:section,lines:panel.lines.filter((l)=>l.y0>=top)});
+  }
+  return out;
+}
+
+function publisherPageRoles(pages) {
+  let appendix=false;
+  return pages.map((page)=>{
+    const own=worksheetPageRole(page),text=page.items.map((it)=>it.str).join(" ");
+    if(own==="answer_cover")appendix=true;
+    if(appendix && own==="student" && page.items.some((it)=>/^\s*Workbook\s*$/i.test(it.str)) && text.length<800)appendix=false;
+    if(appendix && /\b(?:Words|Sentences|WORKBOOK)/i.test(text) && /쓰세요|골라|배열하세요|write|complete/i.test(text) && own==="student")appendix=false;
+    return {page:page.number,role:appendix?"answers":own};
+  });
+}
+
 async function parsePdfFile(file, forcePageMode) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const pageImages = [];
   const blocks = [];
   const layoutPages = [];
+  const sourcePanels = [];
   const RENDER_SCALE = 2.0;
   const qLineRe = /^\s*(?:\[\s*\d+\s*[~\-–]\s*\d+\s*\]|(?:문\s*)?\d{1,2}\s*[.)\]])/;
   const subQItemRe = /^\s*\d{1,2}\s*[.)\]]/;
 
   for (let p = 1; p <= pdf.numPages; p++) {
+    const pageBlockStart=blocks.length;
     setLoadingProgress(Math.max(12, Math.round(((p - 1) / pdf.numPages) * 85)), `PDF ${p} / ${pdf.numPages}쪽 그림·텍스트 분석 중...`);
     const page = await pdf.getPage(p);
     const vp = page.getViewport({ scale: RENDER_SCALE });
@@ -1563,7 +1976,7 @@ async function parsePdfFile(file, forcePageMode) {
         }
 
         if (splitPts.length === 1) {
-          const sx = splitPts[0];
+          const sx = (cx0+cx1)/2;
           const lTxt = joinPdfLineItems(ln.items.filter((it) => it.x1 <= sx), RENDER_SCALE);
           const rTxt = joinPdfLineItems(ln.items.filter((it) => it.x0 >= sx), RENDER_SCALE);
           qStartYs.push(ln.y0);
@@ -1581,6 +1994,7 @@ async function parsePdfFile(file, forcePageMode) {
         const nextQ = qStartYs.find((qy) => qy > sb.y0 + 2);
         sb.y1 = nextQ ? nextQ - 2 : vp.height;
       });
+      sourcePanels.push(...panelsFromLines({number:p,width:vp.width,height:vp.height},parsedLines.map((line)=>({...line,x:cx0+5})),[[cx0+4,cx1-4]],splitBands.map((band)=>({...band,x0:cx0+4}))));
 
       // Cluster images vertically without crossing question starts or side-by-side splitX
       colImgs.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
@@ -1677,41 +2091,61 @@ async function parsePdfFile(file, forcePageMode) {
         else blocks.push({ type: "image", ...ev.info });
       }
     }
+    for(let bi=pageBlockStart;bi<blocks.length;bi++)blocks[bi].source_page=p;
   }
 
-  const { questions, docTitle, headerLogo, detected_count } = splitBlocksToQuestions(blocks);
+  const sectionWorksheet=await parseSectionWorksheet(layoutPages,pageImages,file.name,forcePageMode);
+  if(sectionWorksheet){
+    if(/지도서|교사용|수업지도안|teacher.?guide|lesson.?plan/i.test(file.name))sectionWorksheet.questions.forEach((q)=>q.recognition_review_reason="교사용 문서입니다. 정답·수업 안내가 학생에게 노출되지 않는지 확인해 주세요.");
+    return sectionWorksheet;
+  }
+  const pageRoles=publisherPageRoles(layoutPages);
+  layoutPages.forEach((page)=>page.worksheet_role=pageRoles.find((r)=>r.page===page.number)?.role);
+  const privatePages=pageRoles.filter((p)=>p.role!=="student").map((p)=>p.page);
+  const studentBlocks=blocks.filter((b)=>!privatePages.includes(b.source_page));
+  const base=splitBlocksToQuestions(studentBlocks);
+  const repeated=repeatedWorksheetQuestions(studentBlocks);
+  const { questions, detected_count } = repeated || base;
+  if(/지도서|교사용|수업지도안|teacher.?guide|lesson.?plan/i.test(file.name))questions.forEach((q)=>q.recognition_review_reason="교사용 문서에서 가져온 문항입니다. 정답·수업 안내가 학생 이미지에 포함되지 않는지 확인하고 학생용 문항만 남겨 주세요.");
+  const {docTitle,headerLogo}=base;
+  const studentPageImages=pageImages.filter((_,i)=>!privatePages.includes(i+1));
+  const importMeta={excluded_pages:privatePages,answer_key_pages:pageImages.filter((_,i)=>privatePages.includes(i+1))};
+  const extraWarnings=[...(privatePages.length?[`교사용·정답 구역 ${privatePages.join(", ")}쪽을 학생 화면에서 제외했습니다. 제외된 페이지는 교사용 원본에서 확인하세요.`]:[]),...(repeated?["쪽마다 반복되는 번호를 분리하고 원본 쪽·번호를 함께 표시했습니다."]:[])];
   const fallbackName = file.name.replace(/\.[^.]+$/, "");
   const emptyNumberLines = blocks.filter((b) => b.type === "text")
     .flatMap((b) => b.text.split("\n")).filter((line) => /^\s*\d{1,3}[.)]\s*$/.test(line)).length;
-  if (emptyNumberLines >= Math.max(6, detected_count)) {
+  if (!repeated && emptyNumberLines >= Math.max(6, detected_count)) {
     const worksheet = await parseSectionWorksheet(layoutPages, pageImages, file.name, forcePageMode);
     if (worksheet) return worksheet;
     return {
-      mode: "omr_pages", page_images: pageImages,
+      mode: "omr_pages", page_images: studentPageImages, ...importMeta,
       questions: [{ num: 1, type: "short", multi: false, prompt: "원본을 보고 문항을 직접 추가·편집해 주세요.", passage: "", choices: [], images: [], answer: "", points: 1, explain: "" }],
       suggested_title: fallbackName, header_logo: "", detected_count: 0,
-      warnings: ["PDF에서 문제 글자가 충분히 추출되지 않아 원본 페이지로 가져왔습니다. 문항 수·질문·정답을 직접 편집하거나 원본을 HWPX로 저장해 올려 주세요. 정답·해설 페이지가 있다면 업로드 전에 제외해 주세요."],
+      warnings: [...extraWarnings,"PDF에서 문제 글자가 충분히 추출되지 않아 원본 페이지로 가져왔습니다. 문항 수·질문·정답을 직접 편집하거나 원본을 HWPX로 저장해 올려 주세요. 정답·해설 페이지가 있다면 업로드 전에 제외해 주세요."],
     };
   }
+  if(detected_count)await applyOriginalPdf(questions,layoutPages,sourcePanels,studentPageImages);
   if (forcePageMode || !detected_count) {
     return {
       mode: "omr_pages",
-      page_images: pageImages,
+      page_images: studentPageImages,
+      ...importMeta,
       questions,
       suggested_title: docTitle || fallbackName,
       header_logo: headerLogo,
       detected_count,
-      warnings: detected_count ? questionParseWarnings(questions) : ["PDF 문항 번호를 인식하지 못했습니다. 원본을 보고 임시 문항의 수·보기·정답을 직접 편집해 주세요."],
+      warnings: [...extraWarnings,...(detected_count ? questionParseWarnings(questions) : ["PDF 문항 번호를 인식하지 못했습니다. 원본을 보고 임시 문항의 수·보기·정답을 직접 편집해 주세요."])],
     };
   }
   return {
     mode: "cards",
-    page_images: pageImages,
+    page_images: studentPageImages,
+    ...importMeta,
     questions,
     suggested_title: docTitle || fallbackName,
     header_logo: headerLogo,
     detected_count,
-    warnings: questionParseWarnings(questions),
+    warnings: [...extraWarnings,...questionParseWarnings(questions)],
   };
 }
 
@@ -1807,7 +2241,7 @@ function renderSvgToDataUrl(svgStr, maxWidth = 920) {
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, targetW, targetH);
         ctx.drawImage(img, 0, 0, targetW, targetH);
-        resolve(canvas.toDataURL("image/jpeg", 0.82));
+        resolve(canvas.toDataURL("image/jpeg", 0.92));
       } catch (_) {
         resolve(null);
       } finally {
@@ -1910,7 +2344,7 @@ async function parseFrequencyGraph(task, svgs, name, forcePageMode = false) {
   if (!image) throw new Error("빈도 그래프 그림을 만들지 못했습니다. 다시 올려 주세요.");
   const questions = task.labels.map((label) => ({ num: label, type: "short", multi: false,
     prompt: `[${label}] 대화를 듣고 빈도수를 숫자로 쓰세요.`, passage: "막대를 그리는 대신 해당 막대의 높이(횟수)를 숫자로 입력하세요.",
-    choices: [], images: [image], answer: "", points: 1, explain: "" }));
+    choices: [], images: [image], content_mode:"image", source_label:String(label), answer: "", points: 1, explain: "" }));
   return { mode: forcePageMode ? "omr_pages" : "cards", questions, detected_count: questions.length, page_images: [image], header_logo: "", suggested_title: name,
     warnings: ["막대그래프 그리기를 빈도수 숫자 응답으로 바꿨습니다. 정답과 배점을 입력해 주세요.",
       ...(task.copies > 1 ? [`같은 시험지 ${task.copies}부 중 한 부만 가져왔습니다.`] : []),
@@ -1935,6 +2369,7 @@ async function parseHwpFile(file, forcePageMode) {
   try {
     const totalPages = Math.max(1, doc.pageCount());
     const svgs = [];
+    const sourcePages = [];
     const pageImages = [];
     for (let p = 0; p < totalPages; p++) {
       setLoadingProgress(
@@ -1943,6 +2378,7 @@ async function parseHwpFile(file, forcePageMode) {
       );
       const svg = doc.renderPageSvg(p);
       svgs.push(svg);
+      sourcePages.push(svgPageInfo(svg,p+1,typeof doc.getPageTextLayout==="function" ? doc.getPageTextLayout(p) : null));
       const imgUrl = await renderSvgToDataUrl(svg, 920);
       if (imgUrl) pageImages.push(imgUrl);
     }
@@ -1953,13 +2389,11 @@ async function parseHwpFile(file, forcePageMode) {
 
     {
       try {
-        const hwpxBytes = doc.exportHwpx();
-        const hwpxFile = new File([hwpxBytes], file.name.replace(/\.hwp$/i, ".hwpx"), { type: "application/hwp+zip" });
-        const cand = await parseHwpxFile(hwpxFile);
+        const hwpxFile = /\.hwpx$/i.test(file.name) ? file : new File([doc.exportHwpx()], file.name.replace(/\.hwp$/i, ".hwpx"), { type: "application/hwp+zip" });
+        const cand = await parseHwpxStructure(hwpxFile);
         graphTask = cand.graph_task;
-        const svgHasImages = svgs.some((s) => s && s.includes("<image"));
-        const candHasImages = cand.questions.some((q) => q.images && q.images.length) || Boolean(cand.header_logo);
-        if (cand.detected_count > 0 && (!svgHasImages || candHasImages)) {
+        // Every visible control is preserved by the rendered source crops below.
+        if (cand.detected_count > 0) {
           parsedCards = cand;
         }
       } catch (_) {}
@@ -2020,10 +2454,12 @@ async function parseHwpFile(file, forcePageMode) {
     }
 
     if (parsedCards) {
+      await applyOriginalHwp(doc,parsedCards,sourcePages,pageImages);
+      parsedCards.warnings=[...(parsedCards.warnings || []),"한글 문서는 브라우저 변환으로 글꼴·떠 있는 표의 배치가 달라질 수 있습니다. 겹치는 문항은 원본을 PDF로 저장해 올리면 인쇄 배치를 보존할 수 있습니다."];
       return {
         ...parsedCards,
         mode: forcePageMode ? "omr_pages" : "cards",
-        page_images: pageImages,
+        page_images: parsedCards.page_images?.length ? parsedCards.page_images : pageImages,
       };
     }
 
@@ -2071,8 +2507,7 @@ async function handleFiles(fileList) {
       parsed = await parseHwpFile(first, document.getElementById("forcePageMode").checked);
     } else if (ext === "hwpx") {
       setLoadingProgress(35, "한글(.hwpx) 문항·그림을 추출하고 있습니다...");
-      parsed = await parseHwpxFile(first);
-      if (parsed.graph_task) parsed = await parseHwpFile(first, document.getElementById("forcePageMode").checked);
+      parsed = await parseHwpxFile(first, document.getElementById("forcePageMode").checked);
     } else if (ext === "pdf") {
       parsed = await parsePdfFile(first, document.getElementById("forcePageMode").checked);
     } else if (["png", "jpg", "jpeg", "webp"].includes(ext)) {
@@ -2193,12 +2628,14 @@ document.getElementById("edUsePin").addEventListener("change", syncPinInputUi);
 function openEditor(exam, variants = []) {
   editorView="answers";focusedQuestionNum=null;
   document.getElementById("showCompletedAnswers").checked=false;
+  document.getElementById("recognitionFilter").value="";
   importedVariantDrafts = JSON.parse(JSON.stringify(variants));
   selectedImportVariant = 0;
   document.getElementById("importVariantWrap").style.display = variants.length > 1 ? "flex" : "none";
   document.getElementById("importVariantSelect").innerHTML = variants.map((v,i)=>`<option value="${i}">${escapeHtml(v.label || v.title)}</option>`).join("");
   currentExam = JSON.parse(JSON.stringify(exam));
   currentExam.questions.forEach((q)=>prepareQuestion(q,false));
+  if(!exam.id){suggestSentenceQuestions(currentExam);importedVariantDrafts.forEach(suggestSentenceQuestions);}
   document.getElementById("editorNotice").style.display="none";
   const notes=document.getElementById("importNotes");
   notes.style.display=currentExam.import_notes?.length?"block":"none";
@@ -2245,6 +2682,9 @@ function selectImportVariant(value) {
   previous.title = document.getElementById("edTitle").value;
   const next = importedVariantDrafts[index];
   currentExam.questions = JSON.parse(JSON.stringify(next.questions));
+  if(next.page_images)currentExam.page_images=[...next.page_images];
+  const pStrip=document.getElementById("pagePreviewStrip");
+  if(pStrip)pStrip.innerHTML=(currentExam.page_images || []).map((u)=>`<img src="${u}" />`).join("");
   currentExam.title = next.title;
   document.getElementById("edTitle").value = next.title;
   document.getElementById("fastAnswersInput").value = "";
@@ -2263,9 +2703,11 @@ function updateReviewSummary() {
     button.classList.toggle("btn-blue",editorView===mode);button.classList.toggle("btn-light",editorView!==mode);
   }
 }
-function setEditorView(view) {editorView=view;focusedQuestionNum=null;renderEditorQuestions();}
+function setEditorView(view) {editorView=view;focusedQuestionNum=null;document.getElementById("recognitionFilter").value="";renderEditorQuestions();}
+function setRecognitionFilter(kind) {document.getElementById("recognitionFilter").value=kind;editorView="all";focusedQuestionNum=null;renderEditorQuestions();}
 function focusQuestion(idx) {
   editorView="all";focusedQuestionNum=currentExam.questions[idx].num;
+  document.getElementById("recognitionFilter").value="";
   renderEditorQuestions();document.getElementById("questionsEditorList").scrollIntoView({behavior:"smooth",block:"start"});
 }
 function editorNotice(text) {
@@ -2290,14 +2732,14 @@ function setCompactResponse(idx,row,value) {
 }
 function compactAnswerInputs(q,idx) {
   const select=(options,value,event)=>`<select onchange="${event}" style="flex:1;min-width:160px;"><option value="">정답 선택</option>${options.map(([v,label])=>`<option value="${escapeHtml(v)}" ${value===v?"selected":""}>${escapeHtml(label)}</option>`).join("")}</select>`;
-  if(q.type==="choice" && !q.multi)return select(q.choices.map((c,i)=>[String(i+1),`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`]),String(q.answer || ""),`setCompactAnswer(${idx},this.value)`);
-  if(!isStructuredQuestion(q))return `<input style="flex:1;min-width:190px;" value="${escapeHtml(q.answer || "")}" placeholder="${q.multi?"선택할 번호: 1,3":"정답 입력"}" onchange="setCompactAnswer(${idx},this.value)" />`;
+  if(q.type==="choice" && !q.multi)return select(q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${c===CIRCLED[i]?"":c}`]),String(q.answer || ""),`setCompactAnswer(${idx},this.value)`);
+  if(!isStructuredQuestion(q))return `<input style="flex:1;min-width:190px;" value="${escapeHtml(q.answer || "")}" placeholder="${q.type==="sentence"?"참고 답안 (선택)":q.multi?"선택할 번호: 1,3":"정답 입력"}" onchange="setCompactAnswer(${idx},this.value)" />`;
   const values=responseValues(q);
   return q.response_items.map((item,ri)=>{
     let input;
     if(q.type==="ox")input=q.choices.map((c,oi)=>`<button type="button" id="compact-${idx}-${ri}-${oi}" class="ans-pill ${values[ri]===c?"active":""}" onclick="setCompactResponse(${idx},${ri},'${c}')">${c==="O"?"○":c==="X"?"×":c}</button>`).join("");
     else {
-      const options=q.type==="matching"?q.choices.map((c,i)=>[String(i+1),`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`]):(item.choices || []).map((c)=>[c,c]);
+      const options=q.type==="matching"?q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${c===CIRCLED[i]?"":c}`]):(item.choices || []).map((c)=>[c,c]);
       input=options.length?select(options,values[ri] || "",`setCompactResponse(${idx},${ri},this.value)`):`<input style="min-width:120px;flex:1;" value="${escapeHtml(values[ri] || "")}" placeholder="정답" onchange="setCompactResponse(${idx},${ri},this.value)" />`;
     }
     return `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;"><span style="font-size:0.82rem;">${escapeHtml(item.label)}</span>${input}</div>`;
@@ -2305,10 +2747,10 @@ function compactAnswerInputs(q,idx) {
 }
 function renderCompactAnswerTable(list) {
   const all=document.getElementById("showCompletedAnswers").checked;
-  const types={choice:"객관식",short:"단답·문장",ox:"OX / T·F",matching:"연결",blanks:"빈칸"};
+  const types={choice:"객관식",short:"단답",sentence:"문장형 · 교사 검토",ox:"OX / T·F",matching:"연결",blanks:"빈칸"};
   let count=0;
   currentExam.questions.forEach((q,idx)=>{
-    if(!all && answerIsComplete(q))return;
+    if(!all && answerIsComplete(q) && q.type!=="sentence")return;
     count++;
     const row=document.createElement("div");row.className="answer-row";
     row.innerHTML=`<strong>${q.num}</strong><div><div style="font-size:0.83rem;font-weight:700;">${types[q.type] || q.type}${q.images.length?" · 그림 포함":""}</div><div style="font-size:0.8rem;color:var(--muted);">${escapeHtml(q.prompt.split("\n")[0].slice(0,75))}</div><div id="answer-status-${idx}" class="${answerIsComplete(q)?"answer-ready":"answer-missing"}">${answerIsComplete(q)?"입력 완료":"미입력"}</div></div><div class="answer-controls" id="answer-inputs-${idx}">${compactAnswerInputs(q,idx)}</div><button type="button" class="btn btn-light btn-sm" onclick="focusQuestion(${idx})">문제 보기·수정</button>`;
@@ -2327,7 +2769,7 @@ function responseEditorHtml(q, idx) {
   const values = responseValues(q);
   const rows = q.response_items.map((item, ri)=>{
     const options = q.type === "ox" ? q.choices.map((c)=>[c,c === "O" ? "○ (O)" : c === "X" ? "× (X)" : c])
-      : q.type === "matching" ? q.choices.map((c,i)=>[String(i+1),`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`])
+      : q.type === "matching" ? q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)} ${c===CIRCLED[i]?"":c}`])
       : (item.choices || []).map((c)=>[c,c]);
     const answer = options.length ? `<select onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:120px;"><option value="">정답 선택</option>${options.map(([v,t])=>`<option value="${escapeHtml(v)}" ${values[ri]===v?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>`
       : `<input value="${escapeHtml(values[ri] || "")}" placeholder="이 칸의 정답 (다른 표현은 |로 구분)" onchange="setResponseAnswer(${idx},${ri},this.value)" style="flex:1;min-width:180px;" />`;
@@ -2356,6 +2798,14 @@ function updateChoiceText(idx, ci, text) {
   currentExam.questions[idx].choices[ci]=text;
   if (currentExam.questions[idx].type === "matching") renderEditorQuestions();
 }
+function setChoiceLabel(idx,ci,value) {
+  const label=String(value).trim().replace(/[.)]$/,"");
+  if(!/^[A-Za-z가-힣ㄱ-ㅎ0-9①-⑳Ⓐ-ⓩ]{1,3}$/u.test(label)){editorNotice("보기 기호는 A, a, 가, ㄱ, ①, 1처럼 입력해 주세요.");return;}
+  const q=currentExam.questions[idx];
+  const labels=q.choices.map((_,i)=>optionLabel(q,i));labels[ci]=label;
+  if(new Set(labels.map((v)=>v.normalize("NFKC").toLowerCase())).size!==labels.length){editorNotice("보기 기호가 서로 같으면 구분할 수 없습니다. 다른 기호를 입력해 주세요.");return;}
+  q.choice_labels=labels;editorNotice("");renderEditorQuestions();
+}
 function setJudgmentMode(idx, mode) {
   const q=currentExam.questions[idx], values=responseValues(q);
   q.choices=mode === "tf" ? ["T","F"] : ["O","X"];
@@ -2377,12 +2827,108 @@ function removeResponseItem(idx) {
   q.response_items.pop(); prepareQuestion(q,false); renderEditorQuestions();
 }
 
+function hasTextResponses(q) {
+  return q.type==="short" || q.type==="sentence" || (q.type==="blanks" && (q.response_items || []).some((item)=>!(item.choices || []).length));
+}
+function suggestSentenceQuestions(exam) {
+  (exam.questions || []).forEach((q)=>{
+    if(q.type==="short" && (/문장.{0,35}(?:완성|쓰|배열|고쳐)|(?:완성|배열).{0,25}문장|write\s+(?:a\s+)?sentence|\bwords?\b.{0,35}\border\b|(?:unscramble|rearrange).{0,20}sentence/i.test(q.prompt || "") || String(q.answer || "").split("|")[0].trim().split(/\s+/).length>=5))q.type="sentence";
+  });
+}
+function sentenceModeHtml(q,idx) {
+  if(!["short","sentence"].includes(q.type))return "";
+  return `<label style="display:block;margin:10px 0;">채점 방식 <select onchange="setSentenceMode(${idx},this.value)"><option value="short" ${q.type==="short"?"selected":""}>단답형 · 자동 채점</option><option value="sentence" ${q.type==="sentence"?"selected":""}>문장형 · 문법/철자 검사 후 교사 채점</option></select></label>`;
+}
+function setSentenceMode(idx,type) {
+  if(!["short","sentence"].includes(type))return;
+  currentExam.questions[idx].type=type;
+  if(document.getElementById("previewModal").classList.contains("show"))renderPreviewModal(null);else renderEditorQuestions();
+}
+function textGradingDefaults(q) {
+  return {ignore_spaces:false,ignore_case:true,allow_typos:false,max_typos:1,normalized_credit:100,typo_credit:50,...(q.text_grading || {})};
+}
+function setTextGrading(idx,key,value) {
+  const q=currentExam.questions[idx];if(!q || !hasTextResponses(q))return;
+  q.text_grading=textGradingDefaults(q);
+  if(["ignore_spaces","ignore_case","allow_typos"].includes(key))q.text_grading[key]=Boolean(value);
+  else if(key==="max_typos")q.text_grading[key]=Number(value)===2?2:1;
+  else if(["normalized_credit","typo_credit"].includes(key))q.text_grading[key]=Math.max(0,Math.min(100,Number(value)||0));
+}
+function applyTextGradingAll(idx) {
+  const policy=textGradingDefaults(currentExam.questions[idx]);
+  currentExam.questions.filter(hasTextResponses).forEach((q)=>{q.text_grading={...policy};});
+  renderEditorQuestions();
+  if(document.getElementById("previewModal").classList.contains("show"))renderPreviewModal(null);
+  editorNotice("모든 주관식 문항에 같은 채점 기준을 적용했습니다. 문항 배점과 답칸별 부분 점수 설정은 각각 유지합니다.");
+}
+function gradingSettingsHtml(q,idx) {
+  if(!hasTextResponses(q))return "";
+  if(q.type==="sentence")return `${sentenceModeHtml(q,idx)}<div style="padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">문장형은 정답 일치 여부와 관계없이 채점을 보류합니다. 참고 답안은 선택 사항입니다. 제출 후 결과 화면에서 영어 기본 문법·철자 확인 항목을 보고 교사가 점수를 확정합니다. 검사 결과로 점수를 자동 결정하지 않습니다.</div>`;
+  const p=textGradingDefaults(q);q.text_grading={...p};
+  return `${sentenceModeHtml(q,idx)}<details style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;background:#f8fafc;"><summary style="cursor:pointer;font-weight:700;">주관식 채점 설정</summary>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin:12px 0;">
+      ${[["ignore_spaces","띄어쓰기 무시"],["ignore_case","대소문자 무시"],["allow_typos","철자 오류 허용"]].map(([key,label])=>`<label><input type="checkbox" ${p[key]?"checked":""} onchange="setTextGrading(${idx},'${key}',this.checked)" /> ${label}</label>`).join("")}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+      <label>띄어쓰기·대소문자만 보정 시 배점의 <input type="number" min="0" max="100" step="1" value="${p.normalized_credit}" onchange="setTextGrading(${idx},'normalized_credit',this.value)" style="width:65px;" /> % 인정</label>
+      <label>허용 철자 오류 <select onchange="setTextGrading(${idx},'max_typos',this.value)"><option value="1" ${p.max_typos!==2?"selected":""}>1글자</option><option value="2" ${p.max_typos===2?"selected":""}>2글자</option></select></label>
+      <label>철자 오류 시 배점의 <input type="number" min="0" max="100" step="1" value="${p.typo_credit}" onchange="setTextGrading(${idx},'typo_credit',this.value)" style="width:65px;" /> % 인정</label>
+    </div>
+    <div style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-top:8px;">정확히 일치하면 문항 배점 전부를 줍니다. 앞뒤 공백은 항상 제외하고, 문장 안 띄어쓰기·대소문자는 체크한 항목만 보정합니다. 철자 오류는 정답의 4글자 이상 단어에서 글자 추가·누락·교체·인접 글자 뒤바뀜을 비교하며, 숫자·기호·짧은 단어·단어 순서 변경은 자동 보정하지 않습니다. 학생의 원래 답안은 그대로 보관합니다.</div>
+    <button type="button" class="btn btn-light btn-sm" style="margin-top:8px;" onclick="applyTextGradingAll(${idx})">이 기준을 모든 주관식에 적용</button>
+    ${q.type==="blanks"?`<label style="display:block;margin-top:8px;"><input type="checkbox" ${q.partial_credit?"checked":""} onchange="currentExam.questions[${idx}].partial_credit=this.checked" /> 답칸별 부분 점수 (해제하면 가장 낮은 답칸 인정 비율 적용)</label>`:""}
+  </details>`;
+}
+function teacherAnswerInputsHtml(q,idx) {
+  const button=(value,label,selected,row=null)=>`<button type="button" class="ans-pill ${selected?"active":""}" data-pv-answer="${idx}-${row===null?'choice':row}" data-value="${escapeHtml(value)}" onclick="setPreviewAnswer(${idx},${escapeHtml(JSON.stringify(String(value)))},${row===null?'null':row})" aria-pressed="${selected}">${escapeHtml(label)}</button>`;
+  if(q.type==="choice") {
+    const selected=String(q.answer || "").split(",");
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">${q.choices.map((c,i)=>button(String(i+1),`${optionLabel(q,i)}${imageQuestion(q)?"":" "+c}`,selected.includes(String(i+1)))).join("")}</div>`;
+  }
+  if(q.type==="sentence")return `<textarea class="short-input" rows="3" style="width:100%;margin-top:12px;padding:10px;" placeholder="참고 답안 입력 (선택 사항, 학생에게는 표시되지 않음)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value)">${escapeHtml(q.answer || "")}</textarea>`;
+  if(!isStructuredQuestion(q))return `<input class="short-input" style="width:100%;margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:8px;" value="${escapeHtml(q.answer || "")}" placeholder="학생과 같은 답칸에 정답 입력 (다른 인정 답안은 |로 구분)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value)" />`;
+  const values=responseValues(q);
+  return (q.response_items || []).map((item,ri)=>{
+    let input;
+    if(q.type==="ox")input=q.choices.map((c)=>button(c,c==="O"?"○ (O)":c==="X"?"× (X)":c,values[ri]===c,ri)).join("");
+    else {
+      const options=q.type==="matching"?q.choices.map((c,i)=>[String(i+1),`${optionLabel(q,i)}${imageQuestion(q)?"":" "+c}`]):(item.choices || []).map((c)=>[c,c]);
+      input=options.length?`<select style="padding:10px;max-width:100%;" onchange="setPreviewAnswer(${idx},this.value,${ri})"><option value="">정답 선택</option>${options.map(([v,t])=>`<option value="${escapeHtml(v)}" ${values[ri]===v?"selected":""}>${escapeHtml(t)}</option>`).join("")}</select>`
+        :`<input style="padding:10px;flex:1;min-width:150px;" value="${escapeHtml(values[ri] || "")}" placeholder="정답 입력 (다른 답안은 |)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" oninput="setPreviewAnswer(${idx},this.value,${ri})" />`;
+    }
+    return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;"><strong>${escapeHtml(item.label || `답 ${ri+1}`)}</strong>${input}</div>`;
+  }).join("");
+}
+function setPreviewAnswer(idx,value,row=null) {
+  const q=currentExam?.questions[idx];if(!q)return;
+  if(row!==null && isStructuredQuestion(q)) {
+    const values=responseValues(q);values[row]=String(value);q.answer=JSON.stringify(q.response_items.map((_,i)=>values[i] || ""));
+  } else if(q.type==="choice") {
+    if(q.multi) {
+      const chosen=new Set(String(q.answer || "").split(",").filter(Boolean));
+      if(chosen.has(value))chosen.delete(value);else chosen.add(value);
+      q.answer=[...chosen].sort((a,b)=>Number(a)-Number(b)).join(",");
+    } else q.answer=String(q.answer)===String(value)?"":String(value);
+  } else q.answer=String(value);
+  delete q.answer_source;
+  const selected=row===null?String(q.answer || "").split(","):[responseValues(q)[row]];
+  document.getElementById("previewBody").querySelectorAll?.(`[data-pv-answer="${idx}-${row===null?'choice':row}"]`).forEach((button)=>{
+    const active=selected.includes(button.dataset.value);button.classList.toggle("active",active);button.setAttribute("aria-pressed",String(active));
+  });
+  updatePreviewAnswerSummary();markCompactAnswer(idx);
+}
+function updatePreviewAnswerSummary() {
+  const el=document.getElementById("pvAnswerSummary");if(!el || !currentExam)return;
+  const state=examReadiness(currentExam);el.textContent=`교사용 정답 입력 · ${state.answered}/${state.total}문항 완료 · 입력한 내용은 시험지 초안의 정답으로 반영됩니다.`;
+}
 function renderEditorQuestions() {
   const list = document.getElementById("questionsEditorList");
   list.innerHTML = "";
   updateReviewSummary();
   if(editorView==="answers"){renderCompactAnswerTable(list);return;}
   currentExam.questions.forEach((q, idx) => {
+    const selectedKind=document.getElementById("recognitionFilter").value;
+    if(selectedKind && q.recognition?.kind!==selectedKind)return;
     if(focusedQuestionNum!==null && q.num!==focusedQuestionNum)return;
     if(editorView==="review" && !questionReviewReasons(q).length)return;
     const card = document.createElement("div");
@@ -2392,7 +2938,7 @@ function renderEditorQuestions() {
     const structured = isStructuredQuestion(q);
     const ansSet = new Set(String(q.answer || "").split(",").map((s) => s.trim()).filter(Boolean));
     const choiceBtns = isChoice
-      ? q.choices.map((_, ci) => `<button type="button" class="ans-pill ${ansSet.has(String(ci + 1)) ? "active" : ""}" onclick="setQAnswer(${idx}, '${ci + 1}')">${CIRCLED[ci] || ci+1}</button>`).join("")
+      ? q.choices.map((_, ci) => `<button type="button" class="ans-pill ${ansSet.has(String(ci + 1)) ? "active" : ""}" onclick="setQAnswer(${idx}, '${ci + 1}')">${optionLabel(q,ci)}</button>`).join("")
       : structured ? `<span style="font-size:0.82rem;">아래 답칸별로 설정</span>` : `<input type="text" value="${escapeHtml(q.answer || "")}" placeholder="정답 (유사 답안은 | 로 구분)" onchange="setQAnswer(${idx}, this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;min-width:210px;" />`;
     const multiToggle = isChoice
       ? `<label style="font-size:0.8rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -2401,7 +2947,7 @@ function renderEditorQuestions() {
       : "";
     const choicesHtml = (isChoice || q.type === "matching")
       ? `<div class="choices-edit-grid">
-          ${q.choices.map((c, ci) => `<div style="display:flex;gap:4px;align-items:center;"><span style="font-weight:700;color:var(--muted);">${CIRCLED[ci] || ci+1}</span><input type="text" value="${escapeHtml(c)}" onchange="updateChoiceText(${idx},${ci},this.value)" style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:6px;" /></div>`).join("")}
+          ${q.choices.map((c, ci) => `<div style="display:flex;gap:4px;align-items:center;"><input aria-label="보기 기호" maxlength="3" value="${escapeHtml(optionLabel(q,ci))}" onchange="setChoiceLabel(${idx},${ci},this.value)" style="font-weight:700;width:48px;padding:5px;" /><input type="text" value="${escapeHtml(c)}" onchange="updateChoiceText(${idx},${ci},this.value)" style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:6px;" /></div>`).join("")}
         </div>
         <div style="margin-top:6px;display:flex;gap:6px;">
           <button type="button" class="btn btn-light btn-sm" onclick="addChoice(${idx})">+ 보기 추가</button>
@@ -2409,7 +2955,7 @@ function renderEditorQuestions() {
         </div>`
       : "";
     const imgsHtml = (q.images && q.images.length)
-      ? `<div class="img-thumbs">${q.images.map((u, ii) => `<div style="position:relative;"><img src="${u}" /><button type="button" onclick="removeImage(${idx}, ${ii})" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.65);color:#fff;border:none;border-radius:99px;width:20px;height:20px;cursor:pointer;">×</button></div>`).join("")}</div>`
+      ? `<div class="img-thumbs ${imageQuestion(q)?"original-images":""}">${q.images.map((u, ii) => `<div style="position:relative;"><img src="${u}" /><button type="button" onclick="removeImage(${idx}, ${ii})" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.65);color:#fff;border:none;border-radius:99px;width:20px;height:20px;cursor:pointer;">×</button></div>`).join("")}</div>`
       : "";
     const hasPages = Boolean(currentExam.page_images && currentExam.page_images.length);
     const cropBtnHtml = hasPages
@@ -2429,7 +2975,7 @@ function renderEditorQuestions() {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <strong style="color:var(--navy);font-size:1rem;">${q.num}번</strong>
           <select onchange="changeQType(${idx}, this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:7px;">
-            ${[["choice","객관식"],["short","단답·문장형"],["ox","OX / T·F"],["matching","연결·짝짓기"],["blanks","여러 빈칸·소문항"]].map(([value,label])=>`<option value="${value}" ${q.type===value?"selected":""}>${label}</option>`).join("")}
+            ${[["choice","객관식"],["short","단답형"],["sentence","문장형 · 교사 검토"],["ox","OX / T·F"],["matching","연결·짝짓기"],["blanks","여러 빈칸·소문항"]].map(([value,label])=>`<option value="${value}" ${q.type===value?"selected":""}>${label}</option>`).join("")}
           </select>
           <label style="font-size:0.82rem;color:var(--muted);">배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=parseFloat(this.value)||1" style="width:58px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;" /></label>
           ${multiToggle}
@@ -2440,11 +2986,18 @@ function renderEditorQuestions() {
           <button type="button" class="btn btn-red btn-sm" onclick="deleteQuestion(${idx})">삭제</button>
         </div>
       </div>
-      <div class="field"><label>문제 내용 (질문·지문·보기 설명)</label><textarea rows="6" placeholder="질문, 지문, 보기 설명을 순서대로 적으세요." onchange="currentExam.questions[${idx}].prompt=this.value;updateReviewSummary()">${escapeHtml(q.prompt || "")}</textarea></div>
+      ${q.content_mode==="image"?`<div style="margin:8px 0;color:var(--muted);">학생에게는 아래 원본 이미지와 답안 입력란만 표시됩니다.</div>`:""}
+      ${q.image_review_reason?`<div style="color:var(--red);margin:8px 0;">${escapeHtml(q.image_review_reason)} <button type="button" class="btn btn-light btn-sm" onclick="delete currentExam.questions[${idx}].image_review_reason;renderEditorQuestions()">이미지 확인 완료</button></div>`:""}
+      ${q.recognition?`<div style="font-size:0.85rem;color:var(--muted);margin:8px 0;">문제 분류: ${escapeHtml(q.recognition.label)}</div>`:""}
+      ${q.recognition_review_reason?`<div style="color:var(--red);margin:8px 0;">${escapeHtml(q.recognition_review_reason)} <button type="button" class="btn btn-light btn-sm" onclick="delete currentExam.questions[${idx}].recognition_review_reason;renderEditorQuestions()">유형·답칸 확인 완료</button></div>`:""}
+      ${imageQuestion(q)?"<details><summary>분석용 텍스트 보기·수정</summary>":""}
+      <div class="field"><label>${q.content_mode==="image"?"분석용 텍스트 (학생에게 표시되지 않음)":"문제 내용 (질문·지문·보기 설명)"}</label><textarea rows="6" placeholder="질문, 지문, 보기 설명을 순서대로 적으세요." onchange="currentExam.questions[${idx}].prompt=this.value;updateReviewSummary()">${escapeHtml(q.prompt || "")}</textarea></div>
+      ${imageQuestion(q)?"</details>":""}
       ${imgsHtml}
       ${imgToolsHtml}
       ${choicesHtml}
       ${structured ? responseEditorHtml(q,idx) : ""}
+      ${gradingSettingsHtml(q,idx)}
       <div class="field" style="margin-top:8px;margin-bottom:0;"><input type="text" value="${escapeHtml(q.explain || "")}" placeholder="해설 (선택)" onchange="currentExam.questions[${idx}].explain=this.value" style="font-size:0.85rem;" /></div>
     `;
     card.addEventListener("paste", (e) => {
@@ -2474,6 +3027,7 @@ function setQAnswer(idx, val) {
 }
 function changeQType(idx, newType) {
   const q = currentExam.questions[idx];
+  if(["short","sentence"].includes(q.type) && ["short","sentence"].includes(newType)){q.type=newType;renderEditorQuestions();return;}
   q.type = newType;
   q.answer = "";
   q.multi = false;
@@ -2497,6 +3051,7 @@ function changeQType(idx, newType) {
 function addChoice(idx) {
   const q = currentExam.questions[idx];
   if (q.choices.length >= 30) return alert("보기는 최대 30개까지 추가할 수 있습니다.");
+  if(q.choice_labels?.length){const last=q.choice_labels.at(-1);q.choice_labels.push(/^[A-Ya-y]$/.test(last)?String.fromCharCode(last.charCodeAt(0)+1):CIRCLED[q.choices.length] || String(q.choices.length+1));}
   q.choices.push(`보기 ${q.choices.length + 1}`);
   renderEditorQuestions();
 }
@@ -2504,6 +3059,7 @@ function removeChoice(idx) {
   const q = currentExam.questions[idx];
   if (q.choices.length <= 2) return alert("최소 2개 보기가 필요합니다.");
   q.choices.pop();
+  if(q.choice_labels)q.choice_labels.length=q.choices.length;
   if(q.type==="matching")q.answer=JSON.stringify(responseValues(q).map((v)=>Number(v)>q.choices.length?"":v));
   else q.answer=String(q.answer || "").split(",").filter((v)=>Number(v)<=q.choices.length).join(",");
   renderEditorQuestions();
@@ -2823,10 +3379,11 @@ document.getElementById("saveAndQrBtn").addEventListener("click", async () => {
   creepLoadingProgress(85, "구글 시트에 시험지를 저장하고 있습니다");
   try {
     currentExam.questions.forEach((q)=>prepareQuestion(q,false));
-    if(currentExam.questions.some(isStructuredQuestion)) {
+    if(currentExam.questions.some((q)=>isStructuredQuestion(q) || imageQuestion(q) || q.text_grading || q.type==="sentence" || q.choice_labels?.length)) {
+      const requiredSchema=currentExam.questions.some((q)=>q.choice_labels?.length)?6:currentExam.questions.some((q)=>q.type==="sentence")?5:currentExam.questions.some((q)=>q.text_grading)?4:currentExam.questions.some(imageQuestion)?3:2;
       const capabilities=await apiCall({action:"capabilities"});
-      if(!capabilities.ok || Number(capabilities.question_schema || 0)<2) {
-        alert("OX·연결·여러 빈칸 답안을 저장하려면 수정된 Code.gs를 Apps Script에 붙여넣고 기존 배포를 새 버전으로 업데이트해 주세요.");
+      if(!capabilities.ok || Number(capabilities.question_schema || 0)<requiredSchema) {
+        alert("원본 이미지와 주관식 채점 설정을 저장하려면 수정된 Code.gs를 Apps Script에 붙여넣고 기존 배포를 새 버전으로 업데이트해 주세요.");
         return;
       }
     }
@@ -2891,7 +3448,7 @@ async function deleteExam(examId) {
 function showQrForExam(examId, title, entryPin = "") {
   const baseViewer = getViewerUrl();
   const sep = baseViewer.includes("?") ? "&" : "?";
-  const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}&v=2`;
+  const targetUrl = `${baseViewer}${sep}api=${encodeURIComponent(getApiUrl())}&id=${encodeURIComponent(examId)}&v=6`;
   document.getElementById("qrExamTitle").textContent = title;
   const pinBanner = document.getElementById("qrPinBanner");
   if (pinBanner) {
@@ -2945,7 +3502,7 @@ function renderPreviewModal(examObj) {
   const isFromEditor = !examObj;
   const title = isFromEditor ? (document.getElementById("edTitle").value.trim() || "새 시험지") : target.title;
   const mode = isFromEditor ? document.getElementById("edMode").value : (target.mode || "cards");
-  document.getElementById("pvTitle").textContent = `${title} (학생 화면 미리보기)`;
+  document.getElementById("pvTitle").textContent = `${title} (${isFromEditor?"학생 문제지에서 정답 입력":"학생 화면 미리보기"})`;
   const pvLogo = document.getElementById("pvLogo");
   if (target.header_logo) { pvLogo.src = target.header_logo; pvLogo.style.display = "inline-block"; }
   else { pvLogo.style.display = "none"; }
@@ -2959,25 +3516,31 @@ function renderPreviewModal(examObj) {
   if (mode === "omr_pages" && target.page_images && target.page_images.length) {
     html += `<div class="pv-card">${target.page_images.map((u) => `<img src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
   }
-  target.questions.forEach((q) => {
-    html += `<div class="pv-card"><div style="white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${q.num}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
-    if (q.images && q.images.length) html += `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">${q.images.map((u) => `<img src="${u}" style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
-    if (isStructuredQuestion(q)) html += (q.response_items || []).map((item)=>{
-      const options=q.type==="ox"?q.choices:q.type==="matching"?q.choices.map((c,i)=>`${CIRCLED[i] || i+1} ${c===CIRCLED[i]?"":c}`):(item.choices || []);
+  if(isFromEditor)html+=`<div id="pvAnswerSummary" class="pv-card" style="background:#eff6ff;color:var(--navy);"></div>`;
+  target.questions.forEach((q,idx) => {
+    html += `<div class="pv-card"><div style="white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q.num)}.</strong>${escapeHtml(imageQuestion(q)?"":questionContent(q))}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
+    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">${q.images.map((u) => `<img src="${u}" style="max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
+    if(isFromEditor) {
+      html+=teacherAnswerInputsHtml(q,idx);
+      html+=`<div style="margin-top:12px;"><label>이 문항 배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=Math.max(0.5,Number(this.value)||1)" style="width:70px;padding:6px;" /> 점</label></div>`;
+      html+=gradingSettingsHtml(q,idx);
+    } else if (isStructuredQuestion(q)) html += (q.response_items || []).map((item)=>{
+      const options=q.type==="ox"?q.choices:q.type==="matching"?q.choices.map((c,i)=>`${optionLabel(q,i)} ${imageQuestion(q) || c===CIRCLED[i]?"":c}`):(item.choices || []);
       const input=q.type==="ox" ? `<div style="display:flex;gap:8px;">${options.map((c)=>`<button type="button" disabled style="padding:9px 16px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--navy);">${escapeHtml(c==="O"?"○ (O)":c==="X"?"× (X)":c)}</button>`).join("")}</div>`
         : options.length ? `<select disabled><option>선택하세요</option>${options.map((c)=>`<option>${escapeHtml(c)}</option>`).join("")}</select>` : `<input disabled placeholder="답 입력" />`;
       return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;"><strong>${escapeHtml(item.label)}</strong>${input}</div>`;
     }).join("");
-    else if (q.type === "short") html += `<div style="margin-top:8px;border:1.5px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--muted);font-size:0.9rem;">단답형 답안 입력란</div>`;
-    else if (mode !== "omr_pages") html += q.choices.map((c, ci) => `<div class="pv-choice"><b>${CIRCLED[ci] || (ci + 1)}</b> ${escapeHtml(c)}</div>`).join("");
+    else if (["short","sentence"].includes(q.type)) html += `<div style="margin-top:8px;border:1.5px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--muted);font-size:0.9rem;">단답형 답안 입력란</div>`;
+    else if (mode !== "omr_pages") html += q.choices.map((c, ci) => `<div class="pv-choice"><b>${optionLabel(q,ci)}</b> ${escapeHtml(imageQuestion(q)?"":c)}</div>`).join("");
     html += `</div>`;
   });
   document.getElementById("previewBody").innerHTML = html;
+  if(isFromEditor)updatePreviewAnswerSummary();
   document.getElementById("previewModal").classList.add("show");
 }
 
 document.getElementById("previewEditorBtn").addEventListener("click", () => renderPreviewModal(null));
-document.getElementById("closePreviewBtn").addEventListener("click", () => document.getElementById("previewModal").classList.remove("show"));
+document.getElementById("closePreviewBtn").addEventListener("click", () => {document.getElementById("previewModal").classList.remove("show");if(currentExam)renderEditorQuestions();});
 document.getElementById("pvToggleWidthBtn").addEventListener("click", () => {
   const box = document.getElementById("previewModalBox");
   box.classList.toggle("mobile-width");
@@ -2991,6 +3554,7 @@ document.getElementById("pvSaveBtn").addEventListener("click", () => {
 let latestResults = null;
 let currentResExamId = null;
 let currentResTitle = "";
+const sentenceReviewDrafts = {};
 
 async function openResultsModal(examId, title) {
   currentResExamId = examId;
@@ -3031,7 +3595,40 @@ async function refreshResults() {
     }).join("");
     return `<tr>${tds}</tr>`;
   }).join("");
-  body.innerHTML = `<table style="width:100%;border-collapse:collapse;"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+  body.innerHTML = sentenceReviewHtml(data.reviews || [])+`<table style="width:100%;border-collapse:collapse;"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+}
+
+function sentenceReviewHtml(reviews) {
+  if(!reviews.length)return "";
+  const pending=reviews.reduce((sum,r)=>sum+(r.details || []).filter(d=>d.pending).length,0);
+  return `<section style="margin-bottom:20px;"><h3>문장형 교사 검토 · ${pending}문항 대기</h3><p style="color:var(--muted);">영어 기본 규칙·참고 답안 기반 확인 항목입니다. 자동 검사로 점수를 정하지 않습니다. 확인 항목이 없어도 교사가 문장 의미와 정답을 검토해 주세요.</p>${reviews.map((record,ri)=>{
+    if(record.error)return `<p style="color:var(--red);">${escapeHtml(record.student)}: ${escapeHtml(record.error)}</p>`;
+    return (record.details || []).map((d,di)=>{
+      const draft=sentenceReviewDrafts[`${record.submission_id}:${d.num}`] || {};
+      const report=d.proofread || {findings:[],note:"검사 기록이 없습니다."};
+      const items=(report.findings || []).map(f=>`<li><strong>${escapeHtml(f.kind==="spelling"?"철자":f.kind==="grammar"?"문법":"표현")}</strong> · ${escapeHtml(f.text)}: ${escapeHtml(f.message)}${f.suggestions?.length?` → 후보: ${f.suggestions.map(escapeHtml).join(", ")}`:""}</li>`).join("");
+      return `<details ${d.pending?"open":""} style="margin:12px 0;border:1px solid var(--border);border-radius:8px;padding:12px;"><summary style="cursor:pointer;font-weight:700;">${escapeHtml(record.student)} · ${escapeHtml(d.num)}번 · ${d.pending?"검토 대기":`${d.earned}/${d.points}점 확정`}</summary><div style="white-space:pre-wrap;background:#f8fafc;padding:10px;margin-top:10px;">${escapeHtml(d.picked || "미응답")}</div><div style="white-space:pre-wrap;margin:8px 0;">참고 답안: ${escapeHtml(d.correct || "미등록")}</div><ul>${items || (report.status==="checked"?"<li>기본 검사에서 확인 항목을 찾지 못했습니다. 정답·문법이 정확하다는 뜻은 아닙니다.</li>":"<li>자동 검사 결과가 없습니다. 아래 안내와 원문을 확인해 주세요.</li>")}</ul><p style="font-size:0.82rem;color:var(--muted);">${escapeHtml(report.note)}</p><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;"><label>점수 <input id="review-score-${ri}-${di}" type="number" min="0" max="${d.points}" step="any" value="${escapeHtml(draft.score ?? (d.pending?"":d.earned))}" oninput="setSentenceReviewDraft(${ri},${di},'score',this.value)" placeholder="0~${d.points}" style="width:85px;padding:8px;" /> / ${d.points}</label><input id="review-comment-${ri}-${di}" value="${escapeHtml(draft.comment ?? d.review_comment ?? "")}" oninput="setSentenceReviewDraft(${ri},${di},'comment',this.value)" placeholder="교사 검토 메모 (선택)" style="flex:1;min-width:180px;padding:8px;" /><button type="button" class="btn btn-green btn-sm" onclick="confirmSentenceReview(${ri},${di},this)">${d.pending?"점수 확정":"점수 수정"}</button><span id="review-status-${ri}-${di}" role="status"></span></div></details>`;
+    }).join("");
+  }).join("")}</section>`;
+}
+function setSentenceReviewDraft(ri,di,key,value) {
+  const record=latestResults?.reviews?.[ri],detail=record?.details?.[di];if(!record || !detail)return;
+  const id=`${record.submission_id}:${detail.num}`;
+  sentenceReviewDrafts[id] ||= {};sentenceReviewDrafts[id][key]=value;
+}
+async function confirmSentenceReview(ri,di,button) {
+  const record=latestResults?.reviews?.[ri],detail=record?.details?.[di];if(!record || !detail)return;
+  const score=document.getElementById(`review-score-${ri}-${di}`).value;
+  const status=document.getElementById(`review-status-${ri}-${di}`);
+  if(score.trim()==="" || !Number.isFinite(Number(score)) || Number(score)<0 || Number(score)>detail.points){status.textContent="0점부터 배점 사이의 점수를 입력하세요.";return;}
+  button.disabled=true;status.textContent="저장 중...";
+  try {
+    const data=await apiCall({action:"review_score",id:currentResExamId,submission_id:record.submission_id,num:detail.num,revision:record.revision,score:Number(score),comment:document.getElementById(`review-comment-${ri}-${di}`).value});
+    if(!data.ok){status.textContent=data.error || "저장에 실패했습니다.";return;}
+    delete sentenceReviewDrafts[`${record.submission_id}:${detail.num}`];
+    await refreshResults();
+  } catch(error){status.textContent="저장 결과를 확인하지 못했습니다. 새로고침하여 반영 여부를 확인해 주세요.";}
+  finally {button.disabled=false;}
 }
 
 document.getElementById("resRefreshBtn").addEventListener("click", refreshResults);

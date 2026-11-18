@@ -104,10 +104,12 @@
   }
   .q-imgs img {
     max-width: 100%;
-    max-height: 220px;
+    height: auto;
     border-radius: 8px;
     border: 1px solid var(--border);
   }
+  .q-imgs.original-question { display:block;max-width:760px;border:1px solid var(--border);border-radius:8px;overflow:hidden; }
+  .q-imgs.original-question img { display:block;width:100%;border:0;border-radius:0;margin:0; }
   .choices {
     display: flex;
     flex-direction: column;
@@ -192,6 +194,7 @@
     border-color: var(--blue);
     color: #fff;
   }
+  .judgment-pill { width: auto; min-width: 80px; height: auto; min-height: 42px; padding: 8px 16px; white-space: nowrap; }
   .submit-bar { text-align: center; margin-top: 22px; }
   .btn-submit {
     background: var(--navy);
@@ -244,6 +247,7 @@
   }
   .ox-item.ok { background: var(--green-soft); color: var(--green); }
   .ox-item.bad { background: var(--red-soft); color: var(--red); }
+  .ox-item.partial { background: #fff7ed; color: #9a3412; }
   @media (max-width: 640px) {
     .info-grid { grid-template-columns: repeat(3, 1fr); }
   }
@@ -394,12 +398,69 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function optionLabel(q,index) { return q.choice_labels?.[index] || CIRCLED[index] || String(index+1); }
+function imageQuestion(q) { return q.content_mode === "image" && Boolean(q.images?.length); }
+function questionContent(q) {
+  if(imageQuestion(q))return "";
+  const prompt=String(q.prompt || "").trim(), passage=String(q.passage || "").trim();
+  return passage && !prompt.includes(passage) ? [prompt,passage].filter(Boolean).join("\n\n") : (prompt || passage);
+}
+function isStructuredQuestion(q) { return ["ox","matching","blanks"].includes(q.type); }
+function readResponseParts(raw) {
+  if(Array.isArray(raw))return raw.map(String);
+  try {const value=JSON.parse(String(raw || ""));return Array.isArray(value)?value.map(String):[];} catch(_){return [];}
+}
+function questionAnswered(q) {
+  const raw=answers[String(q.num)];
+  if(!isStructuredQuestion(q))return raw !== undefined && String(raw).trim()!=="";
+  const parts=readResponseParts(raw);
+  return parts.length===(q.response_items || []).length && parts.length>0 && parts.every((v)=>v.trim()!=="");
+}
+function responseOptions(q,item) {
+  if(q.type==="ox")return (q.choices || ["O","X"]).map((v)=>({value:v,label:v==="O"?"○ (O)":v==="X"?"× (X)":v}));
+  if(q.type==="matching")return (q.choices || []).map((v,i)=>({value:String(i+1),label:`${escapeHtml(optionLabel(q,i))} ${imageQuestion(q) || v===CIRCLED[i]?"":v}`}));
+  return (item.choices || []).map((v)=>({value:v,label:v}));
+}
+function structuredInputsHtml(q) {
+  const arg=escapeHtml(JSON.stringify(String(q.num)));
+  const saved=readResponseParts(answers[String(q.num)]);
+  const matchingChoices=q.type==="matching" && !imageQuestion(q) ? `<div style="margin:10px 0;line-height:1.8;">${q.choices.map((c,i)=>`<div><b>${escapeHtml(optionLabel(q,i))}</b> ${escapeHtml(c===CIRCLED[i]?"":c)}</div>`).join("")}</div>` : "";
+  return matchingChoices+(q.response_items || []).map((item,ri)=>{
+    const options=responseOptions(q,item);
+    const label=`<span style="font-weight:700;min-width:60px;">${escapeHtml(item.label || `답 ${ri+1}`)}</span>${item.text && !imageQuestion(q)?`<span>${escapeHtml(item.text)}</span>`:""}`;
+    let input;
+    if(q.type==="ox") {
+      input=`<div style="display:flex;gap:8px;flex-wrap:wrap;">${options.map((o,oi)=>`<button type="button" class="omr-pill judgment-pill ${saved[ri]===o.value?"selected":""}" id="rsp-${q.num}-${ri}-${oi}" onclick="setResponsePart(${arg},${ri},${escapeHtml(JSON.stringify(o.value))},true)">${escapeHtml(o.label)}</button>`).join("")}</div>`;
+    } else if(options.length) {
+      input=`<select aria-label="${escapeHtml(item.label || `답 ${ri+1}`)}" onchange="setResponsePart(${arg},${ri},this.value)" style="padding:10px;border:1px solid var(--border);border-radius:8px;max-width:100%;min-width:160px;"><option value="">선택하세요</option>${options.map((o)=>`<option value="${escapeHtml(o.value)}" ${saved[ri]===o.value?"selected":""}>${escapeHtml(o.label)}</option>`).join("")}</select>`;
+    } else {
+      input=`<input type="text" class="short-input" value="${escapeHtml(saved[ri] || "")}" aria-label="${escapeHtml(item.label || `답 ${ri+1}`)}" style="flex:1;min-width:160px;margin:0;" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="답을 입력하세요" oninput="setResponsePart(${arg},${ri},this.value)" />`;
+    }
+    return `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0;">${label}${input}</div>`;
+  }).join("")+ (q.partial_credit && q.response_items.length>1 ? `<div style="font-size:0.8rem;color:var(--muted);">답칸별 부분 점수가 적용됩니다.</div>` : "");
+}
+function pendingResultHtml(data) {
+  const rows=data.show_score && data.score_mode!=="score_only" && Array.isArray(data.details) ? data.details.map((d)=>
+    `<div style="padding:10px;border-bottom:1px solid var(--border);"><strong>${escapeHtml(d.num)}번</strong> · ${d.pending?"교사 채점 대기":`${d.earned}/${d.points}점`}<div style="white-space:pre-wrap;">내 답: ${escapeHtml(d.picked || "미응답")}</div></div>`).join("") : "";
+  return `<div style="padding:12px;"><div style="font-size:1.2rem;font-weight:800;">답안이 제출되었습니다.</div><p>문장형 ${Number(data.pending_count)||0}문항은 교사 검토 후 점수가 확정됩니다. 최종 점수는 아직 확정되지 않았습니다.</p>${data.show_score?`<p>현재 자동 채점 점수: <strong>${Number(data.total_earned)||0}점</strong> (채점 보류 문항 제외)</p>`:""}<div>제출 시각: ${escapeHtml(data.submitted_at)}</div>${rows}</div>`;
+}
+function setResponsePart(qNum,row,value,toggle=false) {
+  if(examSubmitted)return;
+  const q=(EXAM.questions || []).find((q)=>String(q.num)===String(qNum));
+  if(!q || !q.response_items?.[row])return;
+  const saved=readResponseParts(answers[String(qNum)]);
+  const values=q.response_items.map((_,i)=>saved[i] || "");
+  values[row]=toggle && values[row]===String(value)?"":String(value);
+  answers[String(qNum)]=JSON.stringify(values);
+  responseOptions(q,q.response_items[row]).forEach((option,oi)=>{
+    document.getElementById(`rsp-${qNum}-${row}-${oi}`)?.classList.toggle("selected",values[row]===option.value);
+  });
+  updateProgress();
+}
+
 function updateProgress() {
   if (!EXAM) return;
-  const cnt = EXAM.questions.filter((q) => {
-    const v = answers[String(q.num)];
-    return v !== undefined && String(v).trim() !== "";
-  }).length;
+  const cnt = EXAM.questions.filter(questionAnswered).length;
   document.getElementById("progressPill").textContent = `응답: ${cnt} / ${EXAM.questions.length}`;
 }
 
@@ -429,6 +490,10 @@ function setShort(qNum, val) {
 
 function startExamSession() {
   const root = document.getElementById("mainRoot");
+  if((EXAM.questions || []).some((q)=>isStructuredQuestion(q) && !q.response_items?.length)) {
+    root.innerHTML='<div class="card">시험지의 답칸 정보를 읽지 못했습니다. 선생님께 Apps Script와 학생 페이지가 모두 최신 버전인지 확인해 달라고 요청해 주세요.</div>';
+    return;
+  }
   document.title = EXAM.title;
   document.getElementById("examTitle").textContent = EXAM.title;
   if (EXAM.header_logo) {
@@ -616,6 +681,7 @@ async function init() {
 
 function renderQuestions() {
   const body = document.getElementById("examBody");
+  body.innerHTML="";
   if (EXAM.mode === "omr_pages" && EXAM.page_images && EXAM.page_images.length) {
     displayQuestions = EXAM.questions.map((q) => ({ ...q, _dispNum: q.num }));
     const pagesCard = document.createElement("section");
@@ -630,12 +696,15 @@ function renderQuestions() {
     displayQuestions.forEach((q) => {
       const row = document.createElement("div");
       row.className = "omr-pad-row";
-      if (q.type === "short") {
+      if (isStructuredQuestion(q)) {
+        row.style.display="block";
+        row.innerHTML=`<strong>${q.num}번 · ${escapeHtml(questionContent(q))}</strong>${structuredInputsHtml(q)}`;
+      } else if (["short","sentence"].includes(q.type)) {
         row.innerHTML = `<strong>${q.num}번 ${q.prompt ? "· " + escapeHtml(q.prompt) : ""}</strong><input type="text" class="short-input" style="max-width:260px;margin:0;" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="정답 입력" oninput="setShort('${q.num}', this.value)" />`;
       } else {
         const pills = q.choices.map((c, ci) => {
           const val = String(ci + 1);
-          return `<button type="button" class="omr-pill" id="omr-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', [${q.choices.map((_, k) => `'${k + 1}'`).join(",")}], ${Boolean(q.multi)}, 'omr')">${CIRCLED[ci] || val}</button>`;
+          return `<button type="button" class="omr-pill" id="omr-${q.num}-${val}" onclick="pickChoice('${q.num}', '${val}', [${q.choices.map((_, k) => `'${k + 1}'`).join(",")}], ${Boolean(q.multi)}, 'omr')">${escapeHtml(optionLabel(q,ci))}</button>`;
         }).join("");
         row.innerHTML = `<strong>${q.num}번 ${q.multi ? "<small style='color:var(--blue);'>(복수)</small>" : ""}</strong><div class="omr-pills">${pills}</div>`;
       }
@@ -645,24 +714,25 @@ function renderQuestions() {
     return;
   }
 
-  const hasGroupPrompts = EXAM.questions.some((q) => /^\s*\[\s*\d+\s*[~\-–]\s*\d+\s*\]/.test(q.prompt || ""));
-  const baseOrder = hasGroupPrompts ? [...EXAM.questions] : shuffleArray(EXAM.questions);
+  // Source numbers and option positions also identify pictures and matching targets.
+  const baseOrder = [...EXAM.questions];
   displayQuestions = baseOrder.map((q, di) => {
-    const dispChoices = (q.type !== "short" && q.choices && q.choices.length >= 2)
-      ? shuffleArray(q.choices.map((txt, ci) => ({ text: txt, origVal: String(ci + 1) })))
-      : (q.choices || []).map((txt, ci) => ({ text: txt, origVal: String(ci + 1) }));
-    return { ...q, _dispNum: di + 1, _dispChoices: dispChoices };
+    const dispChoices = (q.choices || []).map((txt, ci) => ({ text: txt, origVal: String(ci + 1) }));
+    return { ...q, _dispNum: q.num, _dispChoices: dispChoices };
   });
 
   displayQuestions.forEach((q) => {
     const card = document.createElement("section");
     card.className = "card";
-    let html = `<div style="font-weight:700;font-size:1.02rem;white-space:pre-line;"><span style="color:var(--navy);margin-right:6px;">${q._dispNum}.</span>${escapeHtml(q.prompt)}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
-    if (q.passage) html += `<div class="passage">${escapeHtml(q.passage)}</div>`;
+    let html = `<div style="font-size:1.02rem;white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q._dispNum)}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
     if (q.images && q.images.length) {
-      html += `<div class="q-imgs">${q.images.map((u) => `<img src="${u}" alt="${q._dispNum}번 그림" />`).join("")}</div>`;
+      html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
     }
-    if (q.type === "short") {
+    if (isStructuredQuestion(q)) {
+      html += structuredInputsHtml(q);
+    } else if (q.type === "sentence") {
+      html += `<textarea class="short-input" rows="3" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="문장으로 답을 입력하세요" oninput="setShort('${q.num}', this.value)"></textarea>`;
+    } else if (q.type === "short") {
       html += `<input type="text" class="short-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="답을 입력하세요" oninput="setShort('${q.num}', this.value)" />`;
     } else {
       const origValsArg = `[${q._dispChoices.map((c) => `'${c.origVal}'`).join(",")}]`;
@@ -670,8 +740,8 @@ function renderQuestions() {
         return `
           <button type="button" class="choice-btn" id="ch-${q.num}-${cObj.origVal}" onclick="pickChoice('${q.num}', '${cObj.origVal}', ${origValsArg}, ${Boolean(q.multi)}, 'ch')">
             <span class="check-box">✓</span>
-            <span style="font-weight:700;color:var(--muted);">${CIRCLED[ci] || (ci + 1)}</span>
-            <span>${escapeHtml(cObj.text)}</span>
+            <span style="font-weight:700;color:var(--muted);">${escapeHtml(optionLabel(q,ci))}</span>
+            <span>${escapeHtml(imageQuestion(q) || cObj.text===CIRCLED[ci]?"":cObj.text)}</span>
           </button>
         `;
       }).join("") + `</div>`;
@@ -697,7 +767,7 @@ async function submitExam(isAuto = false) {
 
     const listForCheck = displayQuestions.length ? displayQuestions : EXAM.questions;
     const unanswered = listForCheck
-      .filter((q) => !String(answers[String(q.num)] || "").trim())
+      .filter((q) => !questionAnswered(q))
       .map((q) => q._dispNum || q.num);
     if (unanswered.length) {
       ignoreBlurUntil = Date.now() + 1000;
@@ -748,7 +818,7 @@ async function submitExam(isAuto = false) {
     examSubmitted = true;
     if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
     document.getElementById("submitBar").style.display = "none";
-    document.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+    document.querySelectorAll("button, input, select, textarea").forEach((el) => { el.disabled = true; });
     const banner = document.getElementById("resultBanner");
 
     const qByNum = {};
@@ -758,7 +828,7 @@ async function submitExam(isAuto = false) {
     const fmtAns = (qOrigNum, rawVal) => {
       if (!rawVal) return "미응답";
       const qObj = qByNum[String(qOrigNum)];
-      if (qObj && qObj.type !== "short" && qObj.choices && qObj.choices.length) {
+      if (qObj && qObj.type === "choice" && qObj.choices && qObj.choices.length) {
         return String(rawVal).split(",").map((v) => {
           const idx = Number(v.trim()) - 1;
           return (idx >= 0 && qObj.choices[idx] !== undefined) ? qObj.choices[idx] : v;
@@ -767,7 +837,9 @@ async function submitExam(isAuto = false) {
       return String(rawVal);
     };
 
-    if (data.show_score && data.score_mode !== "score_only" && Array.isArray(data.details)) {
+    if (data.pending_count > 0) {
+      banner.innerHTML=pendingResultHtml(data);
+    } else if (data.show_score && data.score_mode !== "score_only" && Array.isArray(data.details)) {
       const pct = data.total_possible ? Math.round((data.total_earned / data.total_possible) * 1000) / 10 : 0;
       const orderedDetails = displayQuestions.length
         ? displayQuestions.map((dq) => data.details.find((d) => String(d.num) === String(dq.num))).filter(Boolean)
@@ -775,9 +847,9 @@ async function submitExam(isAuto = false) {
       const oxHtml = orderedDetails.map((d) => {
         const dn = dispNumByOrig[String(d.num)] || d.num;
         return `
-        <div class="ox-item ${d.is_correct ? "ok" : "bad"}">
+        <div class="ox-item ${d.is_correct ? "ok" : d.earned > 0 ? "partial" : "bad"}">
           <div style="font-size:0.78rem;">${dn}번</div>
-          <div>${d.is_correct ? "O" : "X"}</div>
+          <div>${d.is_correct ? "O" : d.earned > 0 ? "△" : "X"}</div>
         </div>
       `;
       }).join("");
@@ -785,7 +857,7 @@ async function submitExam(isAuto = false) {
         const dn = dispNumByOrig[String(d.num)] || d.num;
         return `
         <div style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:0.88rem;">
-          <strong>${dn}번</strong> · 내 답: <b>${escapeHtml(fmtAns(d.num, d.picked))}</b> · 정답: <b style="color:var(--green);">${escapeHtml(fmtAns(d.num, d.correct))}</b>
+          <strong>${dn}번</strong> · 내 답: <b>${escapeHtml(fmtAns(d.num, d.picked))}</b> · 정답: <b style="color:var(--green);">${escapeHtml(fmtAns(d.num, d.correct))}</b> · ${d.earned}/${d.points}점
           ${d.explain ? `<div style="color:var(--muted);margin-top:2px;">${escapeHtml(d.explain)}</div>` : ""}
         </div>
       `;
