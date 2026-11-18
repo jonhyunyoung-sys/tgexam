@@ -1771,6 +1771,125 @@ function svgPageInfo(svg,number,rawLayout) {
     items:(layout.runs || []).map((r)=>({str:r.displayText || r.text,x0:r.x,x1:r.x+r.w,y0:r.y,y1:r.y+r.h,yBase:r.y+r.h*.85,h:r.h,model:r}))};
 }
 
+// Recompose only supported layer trees. Never discard an unknown drawing operation.
+// HWP's logical paragraph order is more reliable than floating-object page coordinates.
+function hwpLayerOps(node) {
+  return [...(node.ops || []),...(node.children || []).flatMap(hwpLayerOps),...(node.child?hwpLayerOps(node.child):[])];
+}
+function hwpLayerOwner(node) {
+  for(const op of hwpLayerOps(node)) {
+    const key=op.source?.stableSourceKey || "";
+    const section=/section:(\d+)/.exec(key),para=/para:(\d+)/.exec(key),cell=/\/cell:(\d+):/.exec(key);
+    if(section && para)return {sec:Number(section[1]),para:Number(cell?cell[1]:para[1])};
+  }
+  return null;
+}
+function hwpLayerSvg(node) {
+  const esc=(v)=>String(v ?? "").replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+  const num=(v)=>{if(!Number.isFinite(v))throw new Error("invalid layer geometry");return v;};
+  const children=()=>[...(node.children || []),...(node.child?[node.child]:[])].map(hwpLayerSvg).join("");
+  if(node.kind==="clipRect") {
+    const b=node.clip;
+    return `<svg x="${num(b.x)}" y="${num(b.y)}" width="${num(b.width)}" height="${num(b.height)}" viewBox="${b.x} ${b.y} ${b.width} ${b.height}" overflow="hidden">${children()}</svg>`;
+  }
+  if(node.kind!=="group" && node.kind!=="leaf")throw new Error("unsupported layer node");
+  return (node.ops || []).map((op)=>{
+    const b=op.bbox,t=op.transform || {};
+    if(t.rotation || t.horzFlip || t.vertFlip)throw new Error("transformed drawing");
+    if(op.type==="textRun") {
+      if(!op.text)return "";
+      if(op.rotation || op.isVertical || op.charOverlap || op.style?.outlineType || op.style?.emboss || op.style?.engrave)throw new Error("complex text");
+      const s=op.paintStyle || op.style,p=op.positions;
+      if(!s || !p?.length)throw new Error("missing glyph positions");
+      let offset=0;
+      return Array.from(op.text).map((char)=>{
+        const start=offset;offset+=char.length;
+        const advance=(p[offset] ?? b.width)-p[start];
+        if(!Number.isFinite(advance) || advance<0)throw new Error("invalid glyph advance");
+        return `<text x="${num(b.x+p[start])}" y="${num(b.y+op.baseline)}" font-family="${esc(s.fontFamily)},Malgun Gothic,serif" font-size="${num(s.fontSize)}" font-weight="${s.bold?'bold':'normal'}" font-style="${s.italic?'italic':'normal'}" fill="${esc(s.color || '#000000')}"${advance>0?` textLength="${advance}" lengthAdjust="spacingAndGlyphs"`:""} xml:space="preserve">${esc(char)}</text>`;
+      }).join("");
+    }
+    if(op.type==="line") {
+      const s=op.style;
+      if(s.startArrow && s.startArrow!=="none" || s.endArrow && s.endArrow!=="none" || s.lineType && s.lineType!=="single")throw new Error("complex line");
+      return `<line x1="${num(op.x1)}" y1="${num(op.y1)}" x2="${num(op.x2)}" y2="${num(op.y2)}" stroke="${esc(s.color)}" stroke-width="${num(s.width)}"${s.dash && s.dash!=="solid"?' stroke-dasharray="4 3"':""} />`;
+    }
+    if(op.type==="rectangle") {
+      const s=op.style;
+      return `<rect x="${num(b.x)}" y="${num(b.y)}" width="${num(b.width)}" height="${num(b.height)}" rx="${num(op.cornerRadius || 0)}" fill="${esc(s.fillColor || 'none')}" stroke="${esc(s.strokeColor || 'none')}" stroke-width="${num(s.strokeWidth || 0)}" opacity="${num(s.opacity ?? 1)}" />`;
+    }
+    if(op.type==="image") {
+      const c=op.crop,size=op.originalSizeHu;
+      if(!op.base64 || op.brightness || op.contrast || (c && size && (c.left || c.top || Math.abs(c.right-size[0])>2 || Math.abs(c.bottom-size[1])>2)))throw new Error("complex image");
+      return `<image x="${num(b.x)}" y="${num(b.y)}" width="${num(b.width)}" height="${num(b.height)}" preserveAspectRatio="none" href="data:${esc(op.mime)};base64,${esc(op.base64)}" />`;
+    }
+    if(op.type==="textDecoration") {
+      const d=op.decoration;
+      if(d.kind!=="underline" || d.shape || d.rotation || d.isVertical)throw new Error("complex decoration");
+      const y=b.y+d.baseline+Math.max(1,d.fontSize*.08);
+      return `<line x1="${num(b.x)}" y1="${num(y)}" x2="${num(b.x+b.width)}" y2="${y}" stroke="${esc(d.color)}" stroke-width="${Math.max(.5,d.fontSize*.045)}" />`;
+    }
+    throw new Error(`unsupported drawing: ${op.type}`);
+  }).join("")+children();
+}
+function repairHwpPageLayout(page,rawTree) {
+  try {
+    const tree=typeof rawTree==="string"?JSON.parse(rawTree):rawTree;
+    const columns=[];
+    const walk=(node)=>{if(node.groupKind?.kind==="column")columns.push(node);else{for(const c of node.children || [])walk(c);if(node.child)walk(node.child);}};
+    walk(tree.root);if(!columns.length)return page;
+    const moves=[],fragments=[];let repaired=0,bottom=0;
+    const visible=(node)=>hwpLayerOps(node).some((op)=>op.type!=="textRun" || /\S/.test(op.text || ""));
+    const entries=columns.map((col)=>({col,blocks:(col.children || []).filter(visible).map((node,i)=>({node,i,owner:hwpLayerOwner(node),box:node.visualBounds || node.bounds})).filter((b)=>b.owner)}));
+    // A title/banner spanning both columns must reserve space in both columns.
+    const spanning=entries.flatMap(({col,blocks})=>blocks.filter((b)=>b.box.width>col.bounds.width*1.35));
+    const banners=spanning.filter((b)=>b.owner.para<=1 && /학년|이름|단원|평가|lesson|test/i.test(hwpLayerOps(b.node).map((op)=>op.text || "").join(" ")));
+    if(spanning.length!==banners.length && columns.length>1)return page;
+    const bannerBottom=banners.length?Math.max(...banners.map((b)=>b.box.y+b.box.height))+10:0;
+    for(const {col,blocks} of entries) {
+      let lastBottom=Math.max(col.bounds.y,bannerBottom),lastOriginal=null;
+      blocks.sort((a,b)=>a.owner.sec-b.owner.sec || a.owner.para-b.owner.para || a.i-b.i);
+      for(const block of blocks) {
+        const {node,owner,box}=block,isBanner=banners.includes(block);
+        const gap=lastOriginal===null?0:Math.max(6,Math.min(35,box.y-lastOriginal));
+        const y=isBanner?box.y:Math.max(box.y,lastBottom+gap);
+        const dy=y-box.y;
+        // Serialize first: unsupported operations abort the whole repair, preserving the native page.
+        const svg=hwpLayerSvg(node);
+        fragments.push(`<g transform="translate(0 ${dy})">${svg}</g>`);
+        moves.push({owner,node,dy,box});
+        if(dy>1)repaired++;
+        if(!isBanner){lastBottom=y+box.height;lastOriginal=box.y+box.height;}
+        bottom=Math.max(bottom,y+box.height);
+      }
+    }
+    if(!repaired)return page;
+    // Keep all visible body objects. Unowned shapes require the unmodified native renderer.
+    if(entries.some(({col,blocks})=>(col.children || []).filter(visible).length!==blocks.length))return page;
+    const runs=page.runs.map((run)=>{
+      const para=run.parentParaIdx ?? run.paraIdx;
+      const candidates=moves.filter((m)=>m.owner.sec===run.secIdx && m.owner.para===para && (run.parentParaIdx===undefined || m.node.groupKind?.kind==="table"));
+      const match=candidates.sort((a,b)=>Math.abs(a.node.bounds.y-run.y)-Math.abs(b.node.bounds.y-run.y))[0];
+      return match?{...run,y:run.y+match.dy}:run;
+    });
+    const height=Math.max(page.height,bottom+35);
+    const margins=[];
+    const preserve=(node)=>{
+      const kind=node.groupKind?.kind;
+      if(kind==="column")return;
+      if(kind==="header" || kind==="footer") {
+        margins.push(`<g transform="translate(0 ${kind==='footer'?height-page.height:0})">${hwpLayerSvg(node)}</g>`);return;
+      }
+      if(node.kind==="leaf" && node.ops?.every((op)=>op.type!=="pageBackground"))margins.push(hwpLayerSvg(node));
+      for(const child of node.children || [])preserve(child);
+      if(node.child)preserve(node.child);
+    };
+    preserve(tree.root);
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}" height="${height}" viewBox="0 0 ${page.width} ${height}"><rect width="${page.width}" height="${height}" fill="white"/>${fragments.join("")}${margins.join("")}</svg>`;
+    return {...svgPageInfo(svg,page.number,{runs}),layout_repaired:repaired,contentTop:bannerBottom};
+  } catch(_) {return page;}
+}
+
 function hwpOriginalPanels(pages,numbers) {
   const panels=[];
   for(const page of pages) {
@@ -1780,7 +1899,7 @@ function hwpOriginalPanels(pages,numbers) {
     const lines=[];
     for(const [x0,x1] of cols) {
       const rows=[];
-      const items=page.items.filter((it)=>(it.x0+it.x1)/2>=x0 && (it.x0+it.x1)/2<x1).sort((a,b)=>a.yBase-b.yBase || a.x0-b.x0);
+      const items=page.items.filter((it)=>String(it.str || "").trim() && (it.x0+it.x1)/2>=x0 && (it.x0+it.x1)/2<x1).sort((a,b)=>a.yBase-b.yBase || a.x0-b.x0);
       for(const item of items) {
         let row=rows.find((r)=>Math.abs(r.yBase-item.yBase)<Math.max(3,item.h*.25));
         if(!row){row={yBase:item.yBase,y0:item.y0,y1:item.y1,items:[]};rows.push(row);}
@@ -1788,7 +1907,7 @@ function hwpOriginalPanels(pages,numbers) {
       }
       for(const row of rows)lines.push({x:x0+1,y0:row.y0,y1:row.y1,text:joinPdfLineItems(row.items.sort((a,b)=>a.x0-b.x0),1)});
     }
-    panels.push(...panelsFromLines({...page,contentTop:0},lines,cols));
+    panels.push(...panelsFromLines({...page,contentTop:page.contentTop || 0},lines,cols));
   }
   return panels;
 }
@@ -2446,6 +2565,15 @@ async function parseHwpFile(file, forcePageMode) {
   }
 
   try {
+    const fallbackName = file.name.replace(/\.[^.]+$/, "");
+    let parsedCards = null;
+    let graphTask = null;
+    try {
+      const hwpxFile = /\.hwpx$/i.test(file.name) ? file : new File([doc.exportHwpx()], file.name.replace(/\.hwp$/i, ".hwpx"), { type: "application/hwp+zip" });
+      const candidate = await parseHwpxStructure(hwpxFile);
+      graphTask = candidate.graph_task;
+      if(candidate.detected_count>0)parsedCards=candidate;
+    } catch (_) {}
     const totalPages = Math.max(1, doc.pageCount());
     const svgs = [];
     const sourcePages = [];
@@ -2455,28 +2583,18 @@ async function parseHwpFile(file, forcePageMode) {
         54 + Math.round(((p + 1) / totalPages) * 32),
         `HWP ${p + 1} / ${totalPages}쪽 렌더링 중...`
       );
-      const svg = doc.renderPageSvg(p);
-      svgs.push(svg);
-      sourcePages.push(svgPageInfo(svg,p+1,typeof doc.getPageTextLayout==="function" ? doc.getPageTextLayout(p) : null));
-      const imgUrl = await renderSvgToDataUrl(svg, 920);
+      const nativeSvg = doc.renderPageSvg(p);
+      let page=svgPageInfo(nativeSvg,p+1,typeof doc.getPageTextLayout==="function" ? doc.getPageTextLayout(p) : null);
+      if(!parsedCards?.variants?.length && !graphTask && typeof doc.getPageLayerTree==="function") {
+        try {page=repairHwpPageLayout(page,doc.getPageLayerTree(p));}catch(_){}
+      }
+      svgs.push(page.svg);
+      sourcePages.push(page);
+      const imgUrl = await renderSvgToDataUrl(page.svg, 1100);
       if (imgUrl) pageImages.push(imgUrl);
     }
 
-    const fallbackName = file.name.replace(/\.[^.]+$/, "");
-    let parsedCards = null;
-    let graphTask = null;
-
     {
-      try {
-        const hwpxFile = /\.hwpx$/i.test(file.name) ? file : new File([doc.exportHwpx()], file.name.replace(/\.hwp$/i, ".hwpx"), { type: "application/hwp+zip" });
-        const cand = await parseHwpxStructure(hwpxFile);
-        graphTask = cand.graph_task;
-        // Every visible control is preserved by the rendered source crops below.
-        if (cand.detected_count > 0) {
-          parsedCards = cand;
-        }
-      } catch (_) {}
-
       if (graphTask) return await parseFrequencyGraph(graphTask, svgs, fallbackName, forcePageMode);
 
       if (!parsedCards) {
@@ -2534,7 +2652,8 @@ async function parseHwpFile(file, forcePageMode) {
 
     if (parsedCards) {
       await applyOriginalHwp(doc,parsedCards,sourcePages,pageImages);
-      parsedCards.warnings=[...(parsedCards.warnings || []),"한글 문서는 브라우저 변환으로 글꼴·떠 있는 표의 배치가 달라질 수 있습니다. 겹치는 문항은 원본을 PDF로 저장해 올리면 인쇄 배치를 보존할 수 있습니다."];
+      const repairedPages=sourcePages.filter((page)=>page.layout_repaired).map((page)=>page.number);
+      parsedCards.warnings=[...(parsedCards.warnings || []),...(repairedPages.length?[`HWP ${repairedPages.join(", ")}쪽의 문단·표·그림 간격을 복구했습니다. 원본 문제 이미지를 확인해 주세요.`]:[])];
       return {
         ...parsedCards,
         mode: forcePageMode ? "omr_pages" : "cards",
