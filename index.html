@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
 <title>온라인 시험지</title>
 <style>
   :root {
@@ -19,6 +19,7 @@
     --bg: #f1f5f9;
   }
   * { box-sizing: border-box; }
+  html { touch-action:pan-x pan-y pinch-zoom; }
   body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
@@ -253,7 +254,7 @@
   .matching-board { position:relative;width:100%;margin:12px 0;background:#f8fafc;border:1px solid var(--border);border-radius:10px; }
   .matching-board svg { position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:hidden; }
   .matching-node { position:absolute;transform:translateY(-50%);min-height:44px;width:30%;border:2px solid var(--border);border-radius:10px;padding:8px 5px;background:white;color:var(--navy);font:inherit;cursor:pointer;overflow-wrap:anywhere; }
-  .matching-source { left:0;touch-action:none; }
+  .matching-source { left:0;touch-action:pinch-zoom; }
   .matching-target { right:0; }
   .matching-node.active { border-color:var(--blue);background:#dbeafe; }
   .matching-node.connected { border-color:#15803d; }
@@ -272,19 +273,12 @@
   .note-actions { display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px; }
   .note-actions button[aria-pressed=true] { color:white;background:var(--blue);border-color:var(--blue); }
   .note-paper-scroll { overflow:auto;padding:10px;flex:1;min-height:0;overscroll-behavior:contain; }
-  #questionNoteCanvas { display:block;width:100%;height:auto;background:repeating-linear-gradient(white 0px,white 27px,#e2e8f0 28px);border:1px solid var(--border);border-radius:6px;touch-action:none;user-select:none;-webkit-user-select:none; }
+  #questionNoteCanvas { display:block;width:100%;height:auto;background:repeating-linear-gradient(white 0px,white 27px,#e2e8f0 28px);border:1px solid var(--border);border-radius:6px;touch-action:pinch-zoom;user-select:none;-webkit-user-select:none; }
   @media(min-width:1000px) { .container.notes-open { width:calc(100% - 474px);max-width:1050px;margin-left:max(14px,calc((100vw - 1520px)/2));margin-right:450px; } }
   @media(max-width:640px) { .notes-panel { top:90px;right:6px;bottom:6px;max-width:calc(100vw - 12px); } .topbar-inner { flex-wrap:wrap; } }
   @media (max-width: 640px) {
     .info-grid { grid-template-columns: repeat(3, 1fr); }
   }
-  img[data-zoomable] { cursor:zoom-in; }
-  .source-image-modal { position:fixed;inset:0;z-index:250;background:#0f172ac9;padding:16px;display:flex;flex-direction:column;gap:10px; }
-  .source-image-modal[hidden] { display:none; }
-  .source-image-tools { display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:white;padding:10px;border-radius:10px; }
-  .source-image-tools button { font:inherit;cursor:pointer;border:1px solid #cbd5e1;background:white;border-radius:7px;padding:8px 12px;min-height:40px; }
-  .source-image-stage { flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:12px; }
-  .source-image-stage img { display:block;max-width:none;height:auto;margin:0 auto;background:white; }
 </style>
 </head>
 <body>
@@ -308,12 +302,6 @@
   </div>
 </main>
 
-<!-- Source image viewer -->
-<div id="sourceImageModal" class="source-image-modal" role="dialog" aria-modal="true" aria-label="원본 이미지 확대" hidden>
-  <div class="source-image-tools"><strong id="sourceImageTitle" style="flex:1;">원본 이미지</strong><button type="button" id="sourceImageMinus" aria-label="이미지 축소">−</button><output id="sourceImageScaleLabel" aria-live="polite">100%</output><button type="button" id="sourceImagePlus" aria-label="이미지 확대">＋</button><button type="button" id="sourceImageFit">화면 맞춤</button><button type="button" id="sourceImageOriginal">원본 크기</button><button type="button" id="sourceImageClose">닫기</button></div>
-  <div id="sourceImageStage" class="source-image-stage"><img id="sourceImageLarge" alt="확대한 원본 이미지" /></div>
-</div>
-
 <script>
 const CIRCLED = ["①", "②", "③", "④", "⑤"];
 const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbykvpnccwVJLeZDZDklKIuMgNS8PDWiGZ8m8gVT0mAUNeZmqM11n_4G1aok0OKDLFLn/exec";
@@ -336,8 +324,12 @@ let examSubmitted = false;
 let examStartedAt = 0;
 let timerInterval = null;
 let autoSubmitTriggered = false;
-let baseInnerWidth = window.innerWidth;
-let baseInnerHeight = window.innerHeight;
+function studentLayoutViewport() {
+  const root=document.documentElement;
+  return {width:root?.clientWidth>0?root.clientWidth:window.innerWidth,height:root?.clientHeight>0?root.clientHeight:window.innerHeight};
+}
+let baseInnerWidth = studentLayoutViewport().width;
+let baseInnerHeight = studentLayoutViewport().height;
 
 function shuffleArray(arr) {
   const copy = [...arr];
@@ -421,8 +413,8 @@ window.addEventListener("focus", () => {
 window.addEventListener("resize", () => {
   updateStudentWorkspaceLayout();
   if (examSubmitted || !EXAM || EXAM.is_open === false || !examStartedAt) return;
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  // Browser pinch changes the visual viewport; only layout width indicates a split screen.
+  const {width:w,height:h} = studentLayoutViewport();
   // Detect orientation rotation (width/height swapped) vs actual split-screen width shrink
   if (Math.abs(w - baseInnerHeight) <= 60 && Math.abs(h - baseInnerWidth) <= 120) {
     baseInnerWidth = w;
@@ -651,7 +643,7 @@ function questionNoteButtonHtml(q) {
   return `<div class="question-note-row"><button type="button" class="question-note-btn" onclick="openQuestionNotes(${Number(q.num)})">✎ ${escapeHtml(q.source_label || q.num)}번 노트 열기</button></div>`;
 }
 function studentWorkspaceHtml() {
-  return `<section class="card workspace-tools" aria-label="시험지 화면 크기"><strong>문제 크기</strong><button type="button" id="examZoomOut" aria-label="문제 축소">−</button><input type="range" id="examZoomRange" min="70" max="180" step="10" value="100" aria-label="문제 크기 조절" /><button type="button" id="examZoomIn" aria-label="문제 확대">＋</button><output id="examZoomLabel" aria-live="polite">100%</output><button type="button" id="examZoomReset">기본 크기</button></section>
+  return `<section class="card workspace-tools" aria-label="시험지 화면 크기"><strong>문제 크기</strong><button type="button" id="examZoomOut" aria-label="문제 축소">−</button><input type="range" id="examZoomRange" min="70" max="180" step="10" value="100" aria-label="문제 크기 조절" /><button type="button" id="examZoomIn" aria-label="문제 확대">＋</button><output id="examZoomLabel" aria-live="polite">100%</output><button type="button" id="examZoomReset">기본 크기</button><small style="color:var(--muted);">두 손가락을 벌리거나 오므려 화면을 확대·축소할 수 있어요.</small></section>
     <aside id="questionNotesPanel" class="notes-panel" aria-label="문제별 필기 노트" hidden>
       <div class="note-heading"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><strong id="questionNoteTitle">문제 노트</strong><button type="button" class="note-close" id="closeQuestionNotes">닫기</button></div>
         <div class="note-actions"><label>문제 <select id="noteQuestionSelect" aria-label="노트를 열 문제"></select></label><button type="button" id="notePen" aria-pressed="true">펜</button><button type="button" id="noteEraser" aria-pressed="false">지우개</button><select id="noteColor" aria-label="펜 색상"><option value="#1e3a5f">남색</option><option value="#111827">검정</option><option value="#2563eb">파랑</option><option value="#dc2626">빨강</option><option value="#15803d">초록</option></select><select id="noteWidth" aria-label="펜 굵기"><option value="2">가는 펜</option><option value="4" selected>보통 펜</option><option value="7">굵은 펜</option></select><button type="button" id="noteUndo">되돌리기</button><button type="button" id="noteClear">이 문제 노트 지우기</button></div>
@@ -727,6 +719,7 @@ function finishNoteStroke() {
     questionNotes.get(activeNoteNum).push(noteStroke);
   }
   noteStroke=null;notePointerId=null;notePointerType=null;
+  document.getElementById("questionNoteCanvas").style.touchAction="pinch-zoom";
 }
 function startNoteStroke(event) {
   if(examSubmitted || activeNoteNum===null || (event.button!==undefined && event.button!==0))return;
@@ -734,6 +727,7 @@ function startNoteStroke(event) {
   if(noteStroke)return;
   if(event.pointerType==="touch" && Date.now()-lastNotePenAt<1500)return;
   if(event.pointerType==="pen")lastNotePenAt=Date.now();
+  if(event.pointerType==="pen")document.getElementById("questionNoteCanvas").style.touchAction="none";
   event.preventDefault();notePointerId=event.pointerId;notePointerType=event.pointerType;
   document.getElementById("questionNoteCanvas").setPointerCapture(event.pointerId);
   const color=document.getElementById("noteColor").value;
@@ -751,6 +745,9 @@ function moveNoteStroke(event) {
 }
 function endNoteStroke(event) {
   if(!noteStroke || event.pointerId!==notePointerId)return;
+  if(event.type==="pointercancel" && notePointerType==="touch") {
+    noteStroke=null;notePointerId=null;notePointerType=null;drawQuestionNote();return;
+  }
   if(event.type!=="pointercancel" && event.type!=="lostpointercapture")moveNoteStroke(event);
   finishNoteStroke();drawQuestionNote();
 }
@@ -764,7 +761,8 @@ function clearQuestionNote() {
   ignoreBlurUntil=Date.now()+1000;
   const confirmed=confirm("이 문제의 필기 노트를 모두 지울까요?");ignoreBlurUntil=Date.now()+500;
   if(!confirmed)return;
-  noteStroke=null;notePointerId=null;questionNotes.delete(activeNoteNum);drawQuestionNote();
+  noteStroke=null;notePointerId=null;notePointerType=null;questionNotes.delete(activeNoteNum);
+  document.getElementById("questionNoteCanvas").style.touchAction="pinch-zoom";drawQuestionNote();
 }
 function initStudentWorkspace() {
   questionNotes.clear();activeNoteNum=null;noteStroke=null;notePointerId=null;noteTool="pen";lastNotePenAt=0;
@@ -825,8 +823,8 @@ function startExamSession() {
     </div>
   `;
 
-  baseInnerWidth = window.innerWidth;
-  baseInnerHeight = window.innerHeight;
+  baseInnerWidth = studentLayoutViewport().width;
+  baseInnerHeight = studentLayoutViewport().height;
   renderQuestions();
   initStudentWorkspace();
   attachAntiCopyHandlers();
@@ -992,7 +990,7 @@ function renderQuestions() {
     const pagesCard = document.createElement("section");
     pagesCard.className = "card omr-pages-wrap";
     pagesCard.innerHTML = `<h3 style="margin:0 0 10px;color:var(--navy);">시험지 원문</h3>` +
-      EXAM.page_images.map((u, idx) => `<img data-zoomable tabindex="0" role="button" src="${u}" alt="시험지 ${idx + 1}쪽" />`).join("");
+      EXAM.page_images.map((u, idx) => `<img src="${u}" alt="시험지 ${idx + 1}쪽" />`).join("");
     body.appendChild(pagesCard);
 
     const omrCard = document.createElement("section");
@@ -1036,7 +1034,7 @@ function renderQuestions() {
     card.className = "card";
     let html = `<div style="font-size:1.02rem;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(group.map((item)=>item.source_label || item._dispNum).join("·"))}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
     if (q.images && q.images.length) {
-      html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
+      html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
     }
     if (isStructuredQuestion(q)) {
       html += q.type==="matching"?matchingBoardHtml(group):structuredInputsHtml(q);
@@ -1217,45 +1215,7 @@ async function submitExam(isAuto = false) {
   }
 }
 
-/* Source image enlargement: shared with the student page. */
-let sourceImageZoom=100,sourceImageBaseWidth=0,sourceImageOpener=null;
-function setSourceImageZoom(value) {
-  const amount=Number(value);if(!Number.isFinite(amount))return;
-  sourceImageZoom=Math.max(25,Math.min(500,Math.round(amount)));
-  const img=document.getElementById("sourceImageLarge");
-  img.style.width=`${Math.max(1,sourceImageBaseWidth*sourceImageZoom/100)}px`;
-  document.getElementById("sourceImageScaleLabel").textContent=`${sourceImageZoom}%`;
-}
-function fitSourceImage() {
-  const img=document.getElementById("sourceImageLarge"),stage=document.getElementById("sourceImageStage");
-  if(!img.naturalWidth || !img.naturalHeight)return;
-  sourceImageBaseWidth=img.naturalWidth*Math.min(1,Math.max(1,stage.clientWidth-24)/img.naturalWidth,Math.max(1,stage.clientHeight-24)/img.naturalHeight);
-  setSourceImageZoom(100);stage.scrollTop=0;stage.scrollLeft=0;
-}
-function openSourceImage(image) {
-  if(!image?.src)return;
-  sourceImageOpener=image;
-  document.getElementById("sourceImageTitle").textContent=image.alt || "원본 이미지";
-  document.getElementById("sourceImageModal").hidden=false;
-  const large=document.getElementById("sourceImageLarge");large.onload=fitSourceImage;large.style.width="";sourceImageZoom=100;sourceImageBaseWidth=0;
-  document.getElementById("sourceImageScaleLabel").textContent="100%";
-  large.src=image.currentSrc || image.src;fitSourceImage();
-  document.getElementById("sourceImageClose").focus?.();
-}
-function closeSourceImage() {
-  document.getElementById("sourceImageModal").hidden=true;
-  const large=document.getElementById("sourceImageLarge");large.onload=null;large.removeAttribute?.("src");
-  sourceImageOpener?.focus?.();sourceImageOpener=null;
-}
-function initSourceImageViewer() {
-  document.addEventListener("click",(event)=>{const img=event.target?.closest?.("img[data-zoomable]");if(img)openSourceImage(img);});
-  document.addEventListener("keydown",(event)=>{
-    if(event.key==="Escape" && !document.getElementById("sourceImageModal").hidden){event.preventDefault();closeSourceImage();}
-    else if((event.key==="Enter" || event.key===" ") && event.target?.matches?.("img[data-zoomable]")){event.preventDefault();openSourceImage(event.target);}
-  });
-  for(const [id,handler] of [["sourceImageClose",closeSourceImage],["sourceImagePlus",()=>setSourceImageZoom(sourceImageZoom+25)],["sourceImageMinus",()=>setSourceImageZoom(sourceImageZoom-25)],["sourceImageFit",fitSourceImage],["sourceImageOriginal",()=>{const img=document.getElementById("sourceImageLarge");if(sourceImageBaseWidth)setSourceImageZoom(img.naturalWidth/sourceImageBaseWidth*100);}]])document.getElementById(id).addEventListener("click",handler);
-}
-initSourceImageViewer();
+
 
 
 window.addEventListener("message",(event)=>{

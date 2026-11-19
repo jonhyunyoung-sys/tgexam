@@ -142,13 +142,6 @@
   .answer-checkbox:has(input:checked) { border-color:var(--blue);background:#eff6ff; }
   .answer-checkbox input[type=checkbox] { width:20px;height:20px;padding:0;margin:0;accent-color:var(--blue);flex-shrink:0; }
   .answer-checkbox span { white-space:pre-wrap;overflow-wrap:anywhere; }
-  img[data-zoomable] { cursor:zoom-in; }
-  .source-image-modal { position:fixed;inset:0;z-index:250;background:#0f172ac9;padding:16px;display:flex;flex-direction:column;gap:10px; }
-  .source-image-modal[hidden] { display:none; }
-  .source-image-tools { display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:white;padding:10px;border-radius:10px; }
-  .source-image-tools button { font:inherit;cursor:pointer;border:1px solid #cbd5e1;background:white;border-radius:7px;padding:8px 12px;min-height:40px; }
-  .source-image-stage { flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:12px; }
-  .source-image-stage img { display:block;max-width:none;height:auto;margin:0 auto;background:white; }
   #sourceQuestionOptions[hidden] { display:none; }
   .question-edit-layout { display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,1fr);gap:18px;margin-top:14px;align-items:start; }
   .question-edit-panel { min-width:0;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fff; }
@@ -341,7 +334,7 @@
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;">
       <button type="button" class="btn btn-light btn-sm" onclick="openSourceQuestionBuilder()">✂️ 원본에서 새 문항 만들기</button>
       <label class="btn btn-light btn-sm" style="cursor:pointer;">원본 페이지 불러오기<input type="file" id="sourcePagesInput" accept=".hwp,.hwpx,.pdf,image/*" multiple style="display:none;" onchange="loadEditorSourcePages(this)" /></label>
-      <span style="font-size:.8rem;color:var(--muted);">원본 이미지를 클릭하면 확대할 수 있습니다.</span>
+      <span style="font-size:.8rem;color:var(--muted);">원본에서 필요한 문제 영역을 다시 선택할 수 있습니다.</span>
     </div>
     <div class="fast-answer-bar">
       <strong style="font-size:0.88rem;color:var(--navy);">⚡ 빠른 정답 일괄 입력:</strong>
@@ -479,11 +472,6 @@
   </div>
 </div>
 
-<!-- Source image viewer -->
-<div id="sourceImageModal" class="source-image-modal" role="dialog" aria-modal="true" aria-label="원본 이미지 확대" hidden>
-  <div class="source-image-tools"><strong id="sourceImageTitle" style="flex:1;">원본 이미지</strong><button type="button" id="sourceImageMinus" aria-label="이미지 축소">−</button><output id="sourceImageScaleLabel" aria-live="polite">100%</output><button type="button" id="sourceImagePlus" aria-label="이미지 확대">＋</button><button type="button" id="sourceImageFit">화면 맞춤</button><button type="button" id="sourceImageOriginal">원본 크기</button><button type="button" id="sourceImageClose">닫기</button></div>
-  <div id="sourceImageStage" class="source-image-stage"><img id="sourceImageLarge" alt="확대한 원본 이미지" /></div>
-</div>
 <!-- Global Loading Bar Overlay -->
 <div class="loading-overlay" id="loadingOverlay" aria-live="polite">
   <div class="loading-card">
@@ -3002,7 +2990,7 @@ function openEditor(exam, variants = []) {
   const pStrip = document.getElementById("pagePreviewStrip");
   if (currentExam.page_images && currentExam.page_images.length) {
     pWrap.style.display = "block";
-    pStrip.innerHTML = currentExam.page_images.map((u) => `<img src="${escapeHtml(u)}" alt="&#50896;&#48376; &#54168;&#51060;&#51648;" data-zoomable tabindex="0" role="button" />`).join("");
+    pStrip.innerHTML = currentExam.page_images.map((u) => `<img src="${escapeHtml(u)}" alt="&#50896;&#48376; &#54168;&#51060;&#51648;" />`).join("");
   } else {
     pWrap.style.display = "none";
     pStrip.innerHTML = "";
@@ -3022,7 +3010,7 @@ function selectImportVariant(value) {
   currentExam.questions = JSON.parse(JSON.stringify(next.questions));
   if(next.page_images)currentExam.page_images=[...next.page_images];
   const pStrip=document.getElementById("pagePreviewStrip");
-  if(pStrip)pStrip.innerHTML=(currentExam.page_images || []).map((u)=>`<img src="${escapeHtml(u)}" alt="&#50896;&#48376; &#54168;&#51060;&#51648;" data-zoomable tabindex="0" role="button" />`).join("");
+  if(pStrip)pStrip.innerHTML=(currentExam.page_images || []).map((u)=>`<img src="${escapeHtml(u)}" alt="&#50896;&#48376; &#54168;&#51060;&#51648;" />`).join("");
   currentExam.title = next.title;
   document.getElementById("edTitle").value = next.title;
   document.getElementById("fastAnswersInput").value = "";
@@ -3144,14 +3132,14 @@ function undoDeletedQuestionImage(idx) {
 function questionImagesHtml(q,idx) {
   const undo=questionImageDeleteHistory.get(q)?.length?`<button type="button" class="btn btn-light btn-sm" onclick="undoDeletedQuestionImage(${idx})">이미지 삭제 되돌리기</button>`:"";
   if(!q.images?.length)return undo;
-  return `<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<div><img src="${escapeHtml(url)}" alt="${q.num}번 문제 이미지 ${i+1}" loading="lazy" data-zoomable tabindex="0" role="button" aria-label="${q.num}번 이미지 ${i+1} 확대" /><div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;"><button type="button" class="btn btn-light btn-sm" onclick="openImageCropModal(${idx},${i})">✂️ 이미지 ${i+1} 자르기</button><button type="button" class="btn btn-light btn-sm" onclick="deleteQuestionImage(${idx},${i})">이미지 ${i+1} 삭제</button>${imageCropHistory.get(q)?.has(url)?`<button type="button" class="btn btn-light btn-sm" onclick="undoQuestionImageCrop(${idx},${i})">자르기 되돌리기</button>`:""}</div></div>`).join("")}${undo}</div>`;
+  return `<div class="answer-question-images ${imageQuestion(q)?"original":""}">${q.images.map((url,i)=>`<div><img src="${escapeHtml(url)}" alt="${q.num}번 문제 이미지 ${i+1}" loading="lazy" /><div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px;"><button type="button" class="btn btn-light btn-sm" onclick="openImageCropModal(${idx},${i})">✂️ 이미지 ${i+1} 자르기</button><button type="button" class="btn btn-light btn-sm" onclick="deleteQuestionImage(${idx},${i})">이미지 ${i+1} 삭제</button>${imageCropHistory.get(q)?.has(url)?`<button type="button" class="btn btn-light btn-sm" onclick="undoQuestionImageCrop(${idx},${i})">자르기 되돌리기</button>`:""}</div></div>`).join("")}${undo}</div>`;
 }
 function renderCompactAnswerTable(list) {
   const all=document.getElementById("showCompletedAnswers").checked;
   const types={choice:"객관식",short:"주관식",sentence:"주관식 · 교사 확인",ox:"OX / T·F",matching:"연결",blanks:"여러 답칸·꼬리문제"};
   if(currentExam.page_images?.length && (currentExam.mode==="omr_pages" || currentExam.questions.some((q)=>!q.images?.length && !questionContent(q).trim()))) {
     const pages=document.createElement("div");pages.className="answer-question-images original";
-    pages.innerHTML=`<strong>시험지 원본</strong>${currentExam.page_images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="시험지 ${i+1}페이지" loading="lazy" data-zoomable tabindex="0" role="button" />`).join("")}`;
+    pages.innerHTML=`<strong>시험지 원본</strong>${currentExam.page_images.map((url,i)=>`<img src="${escapeHtml(url)}" alt="시험지 ${i+1}페이지" loading="lazy" />`).join("")}`;
     list.appendChild(pages);
   }
   let count=0;
@@ -3395,7 +3383,7 @@ function renderEditorQuestions() {
       <strong style="color:var(--navy);font-size:1.15rem;">${q.num}번 문제 수정</strong>
       <div class="question-edit-layout">
       <section class="question-edit-panel"><h3>1. 문제 내용·이미지</h3>
-      <p class="question-edit-help">${q.content_mode==="image"?"학생에게 보이는 원본 문제입니다. 클릭하면 확대되고, 자르기·삭제·영역 다시 선택으로 내용을 바꿀 수 있습니다.":"질문과 지문을 아래에 입력하고 필요한 그림을 추가하세요."}</p>
+      <p class="question-edit-help">${q.content_mode==="image"?"학생에게 보이는 원본 문제입니다. 자르기·삭제·영역 다시 선택으로 내용을 바꿀 수 있습니다.":"질문과 지문을 아래에 입력하고 필요한 그림을 추가하세요."}</p>
       ${q.image_review_reason?`<div style="color:var(--red);margin:8px 0;">${escapeHtml(q.image_review_reason)} <button type="button" class="btn btn-light btn-sm" onclick="delete currentExam.questions[${idx}].image_review_reason;renderEditorQuestions()">이미지 확인 완료</button></div>`:""}
       ${q.recognition_review_reason?`<div style="color:var(--red);margin:8px 0;">${escapeHtml(q.recognition_review_reason)} <button type="button" class="btn btn-light btn-sm" onclick="delete currentExam.questions[${idx}].recognition_review_reason;renderEditorQuestions()">유형·답칸 확인 완료</button></div>`:""}
       ${q.content_mode==="image"?"<details><summary>인식한 텍스트 확인 (선택)</summary>":""}
@@ -3585,7 +3573,7 @@ function updateCropApplyState() {
   document.getElementById("addSourceRegionBtn").disabled=!valid;
 }
 function renderSourceRegionList() {
-  document.getElementById("sourceRegionList").innerHTML=sourceBuilderRegions.map((entry,i)=>`<div style="max-width:160px;"><img src="${entry.url}" alt="선택 영역 ${i+1}" data-zoomable tabindex="0" role="button" style="max-width:100%;max-height:100px;" /><div>${i+1}. ${entry.region.page}쪽 <button type="button" class="btn btn-light btn-sm" onclick="removeSourceRegion(${i})">빼기</button></div></div>`).join("");
+  document.getElementById("sourceRegionList").innerHTML=sourceBuilderRegions.map((entry,i)=>`<div style="max-width:160px;"><img src="${entry.url}" alt="선택 영역 ${i+1}" style="max-width:100%;max-height:100px;" /><div>${i+1}. ${entry.region.page}쪽 <button type="button" class="btn btn-light btn-sm" onclick="removeSourceRegion(${i})">빼기</button></div></div>`).join("");
   updateCropApplyState();
 }
 function removeSourceRegion(index) {sourceBuilderRegions.splice(index,1);renderSourceRegionList();}
@@ -3676,7 +3664,7 @@ async function loadEditorSourcePages(input) {
     if(currentExam!==exam)return;
     if(!pages.length)throw new Error("원본 페이지를 읽지 못했습니다.");
     exam.page_images=pages;document.getElementById("pagePreviewWrap").style.display="block";
-    document.getElementById("pagePreviewStrip").innerHTML=pages.map((url,i)=>`<img src="${escapeHtml(url)}" alt="원본 ${i+1}쪽" data-zoomable tabindex="0" role="button" />`).join("");
+    document.getElementById("pagePreviewStrip").innerHTML=pages.map((url,i)=>`<img src="${escapeHtml(url)}" alt="원본 ${i+1}쪽" />`).join("");
     editorNotice(`${pages.length}쪽을 불러왔습니다. 기존 문항과 정답은 유지했습니다.`);
     if(request?.exam===exam && (request.qIdx===null || exam.questions[request.qIdx]===request.question))openSourceQuestionBuilder(request.qIdx);
   } catch(error){if(currentExam===exam)editorNotice(error.message || "원본 페이지를 읽지 못했습니다.");}
@@ -4115,12 +4103,12 @@ function renderPreviewModal(examObj) {
     <div><b>번호</b><div style="border:1px solid var(--border);border-radius:6px;padding:6px;background:#f8fafc;color:var(--muted);">예: 20</div></div>
   </div></div>`;
   if (mode === "omr_pages" && target.page_images && target.page_images.length) {
-    html += `<div class="pv-card">${target.page_images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
+    html += `<div class="pv-card">${target.page_images.map((u) => `<img src="${u}" style="width:100%;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;" />`).join("")}</div>`;
   }
   if(isFromEditor)html+=`<div id="pvAnswerSummary" class="pv-card" style="background:#eff6ff;color:var(--navy);"></div>`;
   target.questions.forEach((q,idx) => {
     html += `<div class="pv-card"><div style="white-space:pre-wrap;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q.num)}.</strong>${escapeHtml(imageQuestion(q)?"":questionContent(q))}${q.multi ? ' <span style="color:var(--blue);font-size:0.82rem;">[모두 고르기]</span>' : ''}</div>`;
-    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:${imageQuestion(q)?"block":"flex"};flex-wrap:wrap;gap:8px;margin:8px 0;max-width:760px;">${q.images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" style="${imageQuestion(q)?"display:block;width:100%;":""}max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
+    if (mode!=="omr_pages" && q.images && q.images.length) html += `<div style="display:${imageQuestion(q)?"block":"flex"};flex-wrap:wrap;gap:8px;margin:8px 0;max-width:760px;">${q.images.map((u) => `<img src="${u}" style="${imageQuestion(q)?"display:block;width:100%;":""}max-width:100%;height:auto;border:1px solid var(--border);border-radius:8px;" />`).join("")}</div>`;
     if(isFromEditor) {
       html+=teacherAnswerInputsHtml(q,idx);
       html+=`<div style="margin-top:12px;"><label>이 문항 배점 <input type="number" min="0.5" step="0.5" value="${q.points || 1}" onchange="currentExam.questions[${idx}].points=Math.max(0.5,Number(this.value)||1)" style="width:70px;padding:6px;" /> 점</label></div>`;
@@ -4265,45 +4253,7 @@ document.getElementById("saveCfgBtn").addEventListener("click", () => {
   alert("설정이 저장되었습니다.");
 });
 
-/* Source image enlargement: shared with the student page. */
-let sourceImageZoom=100,sourceImageBaseWidth=0,sourceImageOpener=null;
-function setSourceImageZoom(value) {
-  const amount=Number(value);if(!Number.isFinite(amount))return;
-  sourceImageZoom=Math.max(25,Math.min(500,Math.round(amount)));
-  const img=document.getElementById("sourceImageLarge");
-  img.style.width=`${Math.max(1,sourceImageBaseWidth*sourceImageZoom/100)}px`;
-  document.getElementById("sourceImageScaleLabel").textContent=`${sourceImageZoom}%`;
-}
-function fitSourceImage() {
-  const img=document.getElementById("sourceImageLarge"),stage=document.getElementById("sourceImageStage");
-  if(!img.naturalWidth || !img.naturalHeight)return;
-  sourceImageBaseWidth=img.naturalWidth*Math.min(1,Math.max(1,stage.clientWidth-24)/img.naturalWidth,Math.max(1,stage.clientHeight-24)/img.naturalHeight);
-  setSourceImageZoom(100);stage.scrollTop=0;stage.scrollLeft=0;
-}
-function openSourceImage(image) {
-  if(!image?.src)return;
-  sourceImageOpener=image;
-  document.getElementById("sourceImageTitle").textContent=image.alt || "원본 이미지";
-  document.getElementById("sourceImageModal").hidden=false;
-  const large=document.getElementById("sourceImageLarge");large.onload=fitSourceImage;large.style.width="";sourceImageZoom=100;sourceImageBaseWidth=0;
-  document.getElementById("sourceImageScaleLabel").textContent="100%";
-  large.src=image.currentSrc || image.src;fitSourceImage();
-  document.getElementById("sourceImageClose").focus?.();
-}
-function closeSourceImage() {
-  document.getElementById("sourceImageModal").hidden=true;
-  const large=document.getElementById("sourceImageLarge");large.onload=null;large.removeAttribute?.("src");
-  sourceImageOpener?.focus?.();sourceImageOpener=null;
-}
-function initSourceImageViewer() {
-  document.addEventListener("click",(event)=>{const img=event.target?.closest?.("img[data-zoomable]");if(img)openSourceImage(img);});
-  document.addEventListener("keydown",(event)=>{
-    if(event.key==="Escape" && !document.getElementById("sourceImageModal").hidden){event.preventDefault();closeSourceImage();}
-    else if((event.key==="Enter" || event.key===" ") && event.target?.matches?.("img[data-zoomable]")){event.preventDefault();openSourceImage(event.target);}
-  });
-  for(const [id,handler] of [["sourceImageClose",closeSourceImage],["sourceImagePlus",()=>setSourceImageZoom(sourceImageZoom+25)],["sourceImageMinus",()=>setSourceImageZoom(sourceImageZoom-25)],["sourceImageFit",fitSourceImage],["sourceImageOriginal",()=>{const img=document.getElementById("sourceImageLarge");if(sourceImageBaseWidth)setSourceImageZoom(img.naturalWidth/sourceImageBaseWidth*100);}]])document.getElementById(id).addEventListener("click",handler);
-}
-initSourceImageViewer();
+
 
 /* ======================== BOOT ======================== */
 (async function boot() {
