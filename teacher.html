@@ -774,6 +774,13 @@ function extractTailQuestions(text,parentNum) {
   return {stem,items};
 }
 
+function sentenceWordBank(text) {
+  if(!/배열|순서.*문장|문장.*(?:대문자|문장부호|쓰|완성)|문장부호|\b(?:sentence|unscramble|rearrange)\b/i.test(text))return false;
+  return [...String(text).matchAll(/\(([^()\n]*\/[^()\n]*)\)/g)].some((m)=>{
+    const words=m[1].split("/").map((s)=>s.trim());
+    return words.length>=3 && words.some((w)=>/^[.!?]$/.test(w)) && words.some((w)=>/[A-Za-z]/.test(w));
+  });
+}
 function prepareQuestion(q, infer = false) {
   q.prompt = questionContent(q);
   q.passage = "";
@@ -784,6 +791,9 @@ function prepareQuestion(q, infer = false) {
   const responseText = q._localContent || text;
   const labels = subpartLabels(responseText);
   const instruction = text.split("\n").slice(0, 4).join(" ");
+  if(infer && sentenceWordBank(text) && !q.tail_questions && ["choice","blanks"].includes(q.type)) {
+    q.type="short";q.choices=[];q.answer="";delete q.choice_labels;delete q.response_items;delete q.partial_credit;
+  }
   if(infer && !isStructuredQuestion(q)) {
     const tail=extractTailQuestions(text,q.source_local_num || q.num);
     if(tail){q.prompt=tail.stem;q.type="blanks";q.choices=[];delete q.choice_labels;q.tail_questions=true;q.response_items=tail.items;}
@@ -815,7 +825,7 @@ function prepareQuestion(q, infer = false) {
       q.type = "matching";
       q.response_items = (labels.length ? labels : ["연결할 보기"]).map((label)=>({label}));
     } else {
-      const ordering=/배열|순서.*문장|\bunscramble\b|\brearrange\b|\bwords?\b.*\border\b/i.test(instruction);
+      const ordering=sentenceWordBank(text) || /배열|순서.*문장|\bunscramble\b|\brearrange\b|\bwords?\b.*\border\b/i.test(instruction);
       const alternatives = ordering?[]:[...responseText.matchAll(/\(([^()\n]{1,180}\/[^()\n]{1,180})\)/g)].map((m)=>m[1].split("/").map((s)=>s.trim())).filter((options)=>options.length>=2 && options.length<=8 && options.every((s)=>s && s.length<=50));
       const comparison = /[<＜]\s*(?:또는|와|과|\/|,)\s*[>＞]/.test(instruction) && /표시|쓰|넣|고르/.test(instruction);
       const blankCount = responseText.split("\n").filter((line)=>!/^\s*[_＿…]+\s*$/.test(line))

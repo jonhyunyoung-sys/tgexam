@@ -250,6 +250,15 @@
   .ox-item.ok { background: var(--green-soft); color: var(--green); }
   .ox-item.bad { background: var(--red-soft); color: var(--red); }
   .ox-item.partial { background: #fff7ed; color: #9a3412; }
+  .matching-board { position:relative;width:100%;margin:12px 0;background:#f8fafc;border:1px solid var(--border);border-radius:10px; }
+  .matching-board svg { position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:hidden; }
+  .matching-node { position:absolute;transform:translateY(-50%);min-height:44px;width:30%;border:2px solid var(--border);border-radius:10px;padding:8px 5px;background:white;color:var(--navy);font:inherit;cursor:pointer;overflow-wrap:anywhere; }
+  .matching-source { left:0;touch-action:none; }
+  .matching-target { right:0; }
+  .matching-node.active { border-color:var(--blue);background:#dbeafe; }
+  .matching-node.connected { border-color:#15803d; }
+  .matching-actions { display:flex;gap:8px;flex-wrap:wrap; }
+  .matching-actions button { border:1px solid var(--border);border-radius:7px;background:white;padding:8px;min-height:40px;font:inherit;cursor:pointer; }
   .workspace-tools { display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:var(--student-header-height,64px);z-index:40; }
   .workspace-tools button,.note-actions button,.note-actions select,.note-close,.question-note-btn { font:inherit;cursor:pointer;min-height:40px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:white;color:var(--navy); }
   .workspace-tools input[type=range] { width:150px; }
@@ -466,7 +475,106 @@ function responseOptions(q,item) {
   if(item.type==="choice")return (item.choices || []).map((v,i)=>({value:v,label:`${optionLabel(item,i)} ${imageQuestion(q)?"":choiceDisplayText(item,i,v)}`}));
   return (item.choices || []).map((v)=>({value:v,label:v}));
 }
+const matchingBoards=new Map();
+let matchingActive=null,matchingDrag=null,matchingSuppressClickUntil=0;
+const matchingColors=["#2563eb","#c2410c","#15803d","#9333ea","#be123c","#0e7490"];
+function matchingQuestionGroup(q) {
+  if(q.type!=="matching" || !q.images?.length)return [q];
+  const same=(other)=>other?.type==="matching" && questionContent(other)===questionContent(q) &&
+    other.choices?.length===q.choices.length && other.choices.every((c,i)=>c===q.choices[i] && optionLabel(other,i)===optionLabel(q,i)) &&
+    other.images?.length===q.images.length && other.images.every((url,i)=>url===q.images[i]);
+  const index=displayQuestions.indexOf(q);if(index<0)return [q];
+  let start=index,end=index;while(start>0 && same(displayQuestions[start-1]))start--;while(end+1<displayQuestions.length && same(displayQuestions[end+1]))end++;
+  return displayQuestions.slice(start,end+1);
+}
+function matchingY(index,count,height) {return (index+.5)*height/Math.max(1,count);}
+function matchingPath(y1,y2,x2=700) {return `M 300 ${y1} C 450 ${y1},550 ${y2},${x2} ${y2}`;}
+function matchingLinesHtml(board) {
+  return board.rows.map((row,i)=>{
+    const value=Number(readResponseParts(answers[String(row.qNum)])[row.part]);
+    if(!Number.isInteger(value) || value<1 || value>board.choices.length)return "";
+    return `<path d="${matchingPath(matchingY(i,board.rows.length,board.height),matchingY(value-1,board.choices.length,board.height))}" fill="none" stroke="${matchingColors[i%matchingColors.length]}" stroke-width="3" vector-effect="non-scaling-stroke" />`;
+  }).join("");
+}
+function matchingBoardHtml(questions) {
+  const q=questions[0],id=`match-${Number(q.num)}`,rows=questions.flatMap((item)=>(item.response_items || []).map((part,i)=>({qNum:item.num,part:i,label:`${item.source_label || item.num}번${item.response_items.length>1?` ${part.label || `답 ${i+1}`}`:""}${!imageQuestion(item) && part.text?` · ${contentLineBreaks(part.text)}`:""}`})));
+  const choices=(q.choices || []).map((value,i)=>({value:String(i+1),label:`${optionLabel(q,i)}${imageQuestion(q)?"":" "+choiceDisplayText(q,i,value)}`}));
+  if(!rows.length || !choices.length)return '<p>연결할 항목이 없습니다. 선생님께 문의해 주세요.</p>';
+  const height=Math.max(220,Math.max(rows.length,choices.length)*64),board={id,rows,choices,height};matchingBoards.set(id,board);
+  return `<p style="font-size:.85rem;color:var(--muted);">원본 그림의 번호를 보고 왼쪽 항목에서 오른쪽 보기까지 끌어 선을 연결하세요. 왼쪽과 오른쪽을 차례로 클릭·터치해도 됩니다.</p>
+    <div id="${id}" class="matching-board" style="height:${height}px;" onpointermove="moveMatchingDrag(event)" onpointerup="endMatchingDrag(event)" onpointercancel="cancelMatchingDrag(event)" onlostpointercapture="cancelMatchingDrag(event)">
+    <svg viewBox="0 0 1000 ${height}" preserveAspectRatio="none" aria-hidden="true"><g id="${id}-lines">${matchingLinesHtml(board)}</g><path id="${id}-preview" style="display:none;" fill="none" stroke="#64748b" stroke-width="3" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" /></svg>
+    ${rows.map((row,i)=>`<button type="button" draggable="false" id="${id}-source-${i}" class="matching-node matching-source" style="top:${(i+.5)*100/rows.length}%;" onpointerdown="startMatchingDrag(event,'${id}',${i})" onclick="selectMatchingSource('${id}',${i})" aria-pressed="false">${escapeHtml(row.label)} ●</button>`).join("")}
+    ${choices.map((choice,i)=>`<button type="button" id="${id}-target-${i}" class="matching-node matching-target" style="top:${(i+.5)*100/choices.length}%;" data-value="${choice.value}" onclick="connectMatchingTarget('${id}',${i})"><span aria-hidden="true">● </span><span>${escapeHtml(choice.label)}</span></button>`).join("")}</div>
+    <div class="matching-actions">${rows.map((row,i)=>`<button type="button" onclick="clearMatchingAnswer('${id}',${i})">${escapeHtml(row.label)} 연결 지우기</button>`).join("")}</div>
+    <div id="${id}-status" style="font-size:.85rem;line-height:1.8;margin:8px 0;" aria-live="polite">${matchingStatusText(board)}</div>${q.partial_credit && q.response_items.length>1?'<small>답칸별 부분 점수가 적용됩니다.</small>':""}`;
+}
+function matchingStatusText(board) {
+  return board.rows.map((row)=>{
+    const value=Number(readResponseParts(answers[String(row.qNum)])[row.part]);
+    return `${row.label}: ${Number.isInteger(value) && board.choices[value-1]?board.choices[value-1].label:"아직 연결하지 않음"}`;
+  }).map(escapeHtml).join(" · ");
+}
+function syncMatchingBoard(board) {
+  if(!board)return;
+  const lines=document.getElementById(`${board.id}-lines`);if(lines)lines.innerHTML=matchingLinesHtml(board);
+  const status=document.getElementById(`${board.id}-status`);if(status)status.innerHTML=matchingStatusText(board);
+  board.rows.forEach((row,i)=>{
+    const button=document.getElementById(`${board.id}-source-${i}`),active=matchingActive?.id===board.id && matchingActive.row===i;
+    button?.classList.toggle("active",active);button?.setAttribute?.("aria-pressed",String(active));
+  });
+  board.choices.forEach((choice,i)=>document.getElementById(`${board.id}-target-${i}`)?.classList.toggle("connected",board.rows.some((row)=>readResponseParts(answers[String(row.qNum)])[row.part]===choice.value)));
+}
+function selectMatchingSource(id,row) {
+  if(examSubmitted || Date.now()<matchingSuppressClickUntil || !matchingBoards.get(id)?.rows[row])return;
+  const previous=matchingActive;matchingActive={id,row};
+  if(previous && previous.id!==id)syncMatchingBoard(matchingBoards.get(previous.id));syncMatchingBoard(matchingBoards.get(id));
+}
+function connectMatchingTarget(id,index) {
+  const board=matchingBoards.get(id);
+  if(examSubmitted || matchingActive?.id!==id || !board?.choices[index] || !board.rows[matchingActive.row])return;
+  const row=board.rows[matchingActive.row];matchingActive=null;
+  setResponsePart(row.qNum,row.part,board.choices[index].value);syncMatchingBoard(board);
+}
+function clearMatchingAnswer(id,index) {
+  const board=matchingBoards.get(id),row=board?.rows[index];if(examSubmitted || !row)return;
+  matchingActive=null;setResponsePart(row.qNum,row.part,"");syncMatchingBoard(board);
+}
+function matchingPointerPoint(event,board) {
+  const rect=document.getElementById(board.id).getBoundingClientRect();
+  return {x:(event.clientX-rect.left)*1000/Math.max(1,rect.width),y:(event.clientY-rect.top)*board.height/Math.max(1,rect.height)};
+}
+function startMatchingDrag(event,id,row) {
+  const board=matchingBoards.get(id);if(examSubmitted || matchingDrag || !board?.rows[row] || event.isPrimary===false || (event.button!==undefined && event.button!==0))return;
+  event.preventDefault();matchingActive={id,row};matchingDrag={id,row,pointerId:event.pointerId,x:event.clientX,y:event.clientY,moved:false};
+  event.currentTarget?.setPointerCapture?.(event.pointerId);syncMatchingBoard(board);
+}
+function moveMatchingDrag(event) {
+  if(!matchingDrag || event.pointerId!==matchingDrag.pointerId || examSubmitted)return;
+  event.preventDefault();const board=matchingBoards.get(matchingDrag.id),point=matchingPointerPoint(event,board);
+  if(Math.hypot(event.clientX-matchingDrag.x,event.clientY-matchingDrag.y)>4)matchingDrag.moved=true;
+  const path=document.getElementById(`${board.id}-preview`);if(path){path.style.display="";path.setAttribute?.("d",matchingPath(matchingY(matchingDrag.row,board.rows.length,board.height),point.y,point.x));}
+}
+function endMatchingDrag(event) {
+  if(!matchingDrag || event.pointerId!==matchingDrag.pointerId)return;
+  const drag=matchingDrag,board=matchingBoards.get(drag.id);matchingDrag=null;
+  const path=document.getElementById(`${board.id}-preview`);if(path)path.style.display="none";
+  if(examSubmitted){matchingActive=null;return;}
+  const point=matchingPointerPoint(event,board);
+  const moved=drag.moved || Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>4;
+  const target=board.choices.findIndex((_,i)=>point.x>=680 && point.x<=1000 && Math.abs(point.y-matchingY(i,board.choices.length,board.height))<=26);
+  if(moved && target>=0){matchingActive={id:drag.id,row:drag.row};connectMatchingTarget(drag.id,target);}
+  else if(moved)matchingActive=null;
+  if(moved)matchingSuppressClickUntil=Date.now()+250;
+  syncMatchingBoard(board);
+}
+function cancelMatchingDrag(event) {
+  if(!matchingDrag || event.pointerId!==matchingDrag.pointerId)return;
+  const board=matchingBoards.get(matchingDrag.id);matchingDrag=null;matchingActive=null;
+  const path=document.getElementById(`${board.id}-preview`);if(path)path.style.display="none";syncMatchingBoard(board);
+}
 function structuredInputsHtml(q) {
+  if(q.type==="matching")return matchingBoardHtml([q]);
   const arg=escapeHtml(JSON.stringify(String(q.num)));
   const saved=readResponseParts(answers[String(q.num)]);
   const matchingChoices=q.type==="matching" && !imageQuestion(q) ? `<div style="margin:10px 0;line-height:1.8;">${q.choices.map((c,i)=>`<div><b>${escapeHtml(optionLabel(q,i))}</b> ${escapeHtml(choiceDisplayText(q,i,c))}</div>`).join("")}</div>` : "";
@@ -503,6 +611,7 @@ function setResponsePart(qNum,row,value,toggle=false) {
     document.getElementById(`rsp-${qNum}-${row}-${oi}`)?.classList.toggle("selected",values[row]===option.value);
   });
   updateProgress();
+  if(q.type==="matching")for(const board of matchingBoards.values())if(board.rows.some((row)=>String(row.qNum)===String(qNum)))syncMatchingBoard(board);
 }
 
 function updateProgress() {
@@ -876,6 +985,7 @@ async function init() {
 
 function renderQuestions() {
   const body = document.getElementById("examBody");
+  matchingBoards.clear();matchingActive=null;matchingDrag=null;
   body.innerHTML="";
   if (EXAM.mode === "omr_pages" && EXAM.page_images && EXAM.page_images.length) {
     displayQuestions = EXAM.questions.map((q) => ({ ...q, _dispNum: q.num }));
@@ -889,11 +999,13 @@ function renderQuestions() {
     omrCard.className = "card";
     omrCard.innerHTML = `<h3 style="margin:0 0 8px;color:var(--navy);">OMR 답안 입력</h3>`;
     displayQuestions.forEach((q) => {
+      const group=q.type==="matching"?matchingQuestionGroup(q):[q];
+      if(group[0]!==q)return;
       const row = document.createElement("div");
       row.className = "omr-pad-row";
       if (isStructuredQuestion(q)) {
         row.style.display="block";
-        row.innerHTML=`<strong>${q.num}번 · ${escapeHtml(questionContent(q))}</strong>${structuredInputsHtml(q)}`;
+        row.innerHTML=`<strong>${group.map((item)=>escapeHtml(item.num)).join("·")}번 · ${escapeHtml(questionContent(q))}</strong>${q.type==="matching"?matchingBoardHtml(group):structuredInputsHtml(q)}`;
       } else if (["short","sentence"].includes(q.type)) {
         row.innerHTML = `<strong>${q.num}번 ${q.prompt ? "· " + escapeHtml(q.prompt) : ""}</strong><input type="text" class="short-input" style="max-width:260px;margin:0;" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="정답 입력" oninput="setShort('${q.num}', this.value)" />`;
       } else {
@@ -903,7 +1015,7 @@ function renderQuestions() {
         }).join("");
         row.innerHTML = `<strong>${q.num}번 ${q.multi ? "<small style='color:var(--blue);'>(복수)</small>" : ""}</strong><div class="omr-pills">${pills}</div>`;
       }
-      row.innerHTML=questionNoteButtonHtml(q)+row.innerHTML;
+      row.innerHTML=group.map(questionNoteButtonHtml).join("")+row.innerHTML;
       omrCard.appendChild(row);
     });
     body.appendChild(omrCard);
@@ -918,14 +1030,16 @@ function renderQuestions() {
   });
 
   displayQuestions.forEach((q) => {
+    const group=q.type==="matching"?matchingQuestionGroup(q):[q];
+    if(group[0]!==q)return;
     const card = document.createElement("section");
     card.className = "card";
-    let html = `<div style="font-size:1.02rem;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(q.source_label || q._dispNum)}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
+    let html = `<div style="font-size:1.02rem;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;"><strong style="color:var(--navy);margin-right:6px;">${escapeHtml(group.map((item)=>item.source_label || item._dispNum).join("·"))}.</strong>${escapeHtml(questionContent(q))}${q.multi ? ' <span style="font-size:0.8rem;color:var(--blue);font-weight:700;">[모두 고르기]</span>' : ''}</div>`;
     if (q.images && q.images.length) {
       html += `<div class="q-imgs ${imageQuestion(q)?"original-question":""}">${q.images.map((u) => `<img data-zoomable tabindex="0" role="button" src="${u}" alt="${q._dispNum}번 원본 문제" />`).join("")}</div>`;
     }
     if (isStructuredQuestion(q)) {
-      html += structuredInputsHtml(q);
+      html += q.type==="matching"?matchingBoardHtml(group):structuredInputsHtml(q);
     } else if (q.type === "sentence") {
       html += `<textarea class="short-input" rows="3" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="문장으로 답을 입력하세요" oninput="setShort('${q.num}', this.value)"></textarea>`;
     } else if (q.type === "short") {
@@ -942,7 +1056,7 @@ function renderQuestions() {
         `;
       }).join("") + `</div>`;
     }
-    card.innerHTML = questionNoteButtonHtml(q)+html;
+    card.innerHTML = group.map(questionNoteButtonHtml).join("")+html;
     body.appendChild(card);
   });
 }
